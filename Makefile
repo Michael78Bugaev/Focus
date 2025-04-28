@@ -1,20 +1,21 @@
 # Directories
-SRC_DIRS := boot kernel drivers/vbe
+SRC_DIRS := boot kernel drivers/vbe drivers/io
 BUILD_DIR := build
 ISO_DIR := iso
 
 # Files
-SOURCES := $(foreach dir,$(SRC_DIRS),$(wildcard $(dir)/*.c) $(wildcard $(dir)/*.s))
+SOURCES := $(foreach dir,$(SRC_DIRS),$(wildcard $(dir)/*.c) $(wildcard $(dir)/*.asm))
 OBJS := $(patsubst %.c,$(BUILD_DIR)/%.o,$(filter %.c,$(SOURCES))) \
-        $(patsubst %.s,$(BUILD_DIR)/%.o,$(filter %.s,$(SOURCES)))
+        $(patsubst %.asm,$(BUILD_DIR)/%.o,$(filter %.asm,$(SOURCES)))
 ISO := myos.iso
 KERNEL := myos.bin
 
 # Tools
 CC := i686-elf-gcc
-AS := i686-elf-as
+AS := nasm
 LD := i686-elf-ld
 CFLAGS := -m32 -ffreestanding -O2 -Wall -Wextra -Iinclude
+ASFLAGS := -f elf32
 
 LDFLAGS := -T linker.ld --allow-multiple-definition
 
@@ -26,9 +27,9 @@ $(BUILD_DIR)/%.o: %.c
 	mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/%.o: %.s
+$(BUILD_DIR)/%.o: %.asm
 	mkdir -p $(dir $@)
-	$(AS) --32 $< -o $@
+	$(AS) $(ASFLAGS) $< -o $@
 
 $(KERNEL): $(OBJS) linker.ld
 	$(LD) $(LDFLAGS) -o $@ $(OBJS)

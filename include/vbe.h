@@ -11,11 +11,15 @@ typedef struct {
     uint32_t height;
     uint8_t  bpp;
     uint8_t* backbuffer;
+    uint8_t* frontbuffer;
 } vbe_mode_info_t;
 
 void vbe_init(uint32_t fb_addr, uint32_t pitch, uint32_t width, uint32_t height, uint8_t bpp);
+void vbe_draw_pixel(uint32_t x, uint32_t y, uint32_t color);
 void vbe_draw_char(uint32_t x, uint32_t y, char c, uint32_t color);
 void vbe_draw_string(uint32_t x, uint32_t y, const char* str, uint32_t color);
 void vbe_swap_buffers(void);
+void vbe_clear_buffer(uint32_t color);
+void vbe_copy_buffer(void);
 
 #endif
