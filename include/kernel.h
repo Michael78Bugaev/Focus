@@ -1,0 +1,1 @@
+int current_sys_disk = 0;
