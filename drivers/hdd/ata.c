@@ -1,277 +1,152 @@
 #include <ata.h>
 #include <ports.h>
-#include <kernel.h>
 #include <string.h>
 
-// Глобальные переменные
-ata_device_t ata_devices[MAX_ATA_DEVICES];
-int ata_device_count = 0;
-uint16_t ata_buffer[256];
+// Массив для хранения информации о дисках
+static ata_drive_t drives[4]; // 4 возможных диска (primary master/slave, secondary master/slave)
 
-// Ожидание освобождения устройства
-int ata_wait_busy(uint16_t base) {
-    for (int i = 0; i < 100000; i++) {
-        if (!(inb(base + 7) & ATA_SR_BSY))
-            return 1;
-    }
+// Функция ожидания готовности диска
+static void ata_wait(uint16_t base) {
+    uint8_t status;
+    do {
+        status = inb(base + ATA_STATUS);
+    } while (status & ATA_SR_BSY);
+}
+
+// Функция проверки ошибок
+static int ata_check_error(uint16_t base) {
+    uint8_t status = inb(base + ATA_STATUS);
+    if (status & ATA_SR_ERR) return -1;
     return 0;
 }
 
-// Ожидание готовности данных
-int ata_wait_drq(uint16_t base) {
-    for (int i = 0; i < 100000; i++) {
-        if (inb(base + 7) & ATA_SR_DRQ)
-            return 1;
-    }
-    return 0;
+// Функция выбора диска
+static void ata_select_drive(uint16_t base, uint8_t drive) {
+    uint8_t value = 0xE0 | (drive << 4); // 0xE0 для LBA режима
+    outb(base + ATA_DRIVE, value);
+    ata_wait(base);
 }
 
-// Чтение статуса
-uint8_t ata_read_status(uint16_t base) {
-    return inb(base + 7);
-}
-
-// Запись команды
-void ata_write_command(uint16_t base, uint8_t command) {
-    outb(base + 7, command);
-}
-
-// Запись LBA адреса
-void ata_write_lba(uint16_t base, uint32_t lba, uint8_t drive) {
-    outb(base + 6, 0xE0 | (drive << 4) | ((lba >> 24) & 0x0F));
-    outb(base + 2, 1); // Количество секторов
-    outb(base + 3, lba & 0xFF);
-    outb(base + 4, (lba >> 8) & 0xFF);
-    outb(base + 5, (lba >> 16) & 0xFF);
-}
-
-// Преобразование строки модели из IDENTIFY данных
-void ata_string_swap(char *str, int len) {
-    for (int i = 0; i < len; i += 2) {
-        char tmp = str[i];
-        str[i] = str[i + 1];
-        str[i + 1] = tmp;
-    }
+// Функция инициализации диска
+static int ata_init_drive(uint16_t base, uint8_t drive) {
+    ata_select_drive(base, drive);
     
-    // Обрезаем пробелы в конце
-    for (int i = len - 1; i >= 0; i--) {
-        if (str[i] == ' ') {
-            str[i] = 0;
-        } else {
-            break;
-        }
-    }
-}
-
-// Идентификация устройства
-int ata_identify(uint8_t bus, uint8_t drive) {
-    uint16_t base = bus ? ATA_SECONDARY_IO : ATA_PRIMARY_IO;
+    // Отправляем команду IDENTIFY
+    outb(base + ATA_COMMAND, ATA_CMD_IDENTIFY);
+    ata_wait(base);
     
-    // Выбор устройства
-    outb(base + 6, 0xA0 | (drive << 4));
+    if (ata_check_error(base)) return -1;
     
-    // Ожидание готовности
-    if (!ata_wait_busy(base)) return 0;
-    
-    // Отправка команды IDENTIFY
-    outb(base + 7, ATA_CMD_IDENTIFY);
-    
-    // Проверка наличия устройства
-    uint8_t status = inb(base + 7);
-    if (status == 0 || status == 0x7F || status == 0xFF) return 0;
-    
-    if (!ata_wait_busy(base)) return 0;
-    if (!ata_wait_drq(base)) return 0;
-    
-    // Чтение данных
+    // Читаем ответ
+    uint16_t buffer[256];
     for (int i = 0; i < 256; i++) {
-        ata_buffer[i] = inw(base);
+        buffer[i] = inw(base + ATA_DATA);
     }
     
-    // Копирование и преобразование информации об устройстве
-    // Модель находится в словах 27-46 (40 байт)
-    char *model = ata_devices[ata_device_count].model;
+    // Заполняем информацию о диске
+    drives[drive].present = 1;
+    drives[drive].type = 1; // ATA
+    drives[drive].sectors = *(uint32_t*)&buffer[60];
+    drives[drive].size = drives[drive].sectors * 512;
+    
+    // Копируем имя диска
+    char* name = (char*)&buffer[27];
     for (int i = 0; i < 20; i++) {
-        uint16_t word = ata_buffer[27 + i];
-        // Меняем порядок байт в каждом слове
-        model[i*2] = (word >> 8) & 0xFF;
-        model[i*2 + 1] = word & 0xFF;
+        drives[drive].name[i*2] = name[i*2+1];
+        drives[drive].name[i*2+1] = name[i*2];
     }
-    model[40] = 0;
+    drives[drive].name[40] = '\0';
     
-    // Удаляем пробелы в конце строки
-    for (int i = 39; i >= 0; i--) {
-        if (model[i] == ' ') {
-            model[i] = 0;
-        } else if (model[i] != 0) {
-            break;
-        }
-    }
-    
-    // Определение размера устройства
-    uint32_t sectors = *(uint32_t*)&ata_buffer[60];
-    ata_devices[ata_device_count].size = sectors * 512;
-    
-    return 1;
+    return 0;
 }
 
-// Инициализация ATA драйвера
+// Инициализация ATA контроллера
 void ata_init() {
-    ata_device_count = 0;
+    memset(drives, 0, sizeof(drives));
     
-    // Проверка первичного канала
-    if (ata_identify(0, ATA_MASTER)) {
-        ata_devices[ata_device_count].bus = 0;
-        ata_devices[ata_device_count].drive = ATA_MASTER;
-        ata_devices[ata_device_count].type = DEVICE_TYPE_ATA;
-        ata_device_count++;
+    // Проверяем primary master
+    if (ata_init_drive(ATA_PRIMARY_BASE, 0) == 0) {
+        drives[0].present = 1;
     }
     
-    if (ata_identify(0, ATA_SLAVE)) {
-        ata_devices[ata_device_count].bus = 0;
-        ata_devices[ata_device_count].drive = ATA_SLAVE;
-        ata_devices[ata_device_count].type = DEVICE_TYPE_ATA;
-        ata_device_count++;
+    // Проверяем primary slave
+    if (ata_init_drive(ATA_PRIMARY_BASE, 1) == 0) {
+        drives[1].present = 1;
     }
     
-    // Проверка вторичного канала
-    if (ata_identify(1, ATA_MASTER)) {
-        ata_devices[ata_device_count].bus = 1;
-        ata_devices[ata_device_count].drive = ATA_MASTER;
-        ata_devices[ata_device_count].type = DEVICE_TYPE_ATA;
-        ata_device_count++;
+    // Проверяем secondary master
+    if (ata_init_drive(ATA_SECONDARY_BASE, 0) == 0) {
+        drives[2].present = 1;
     }
     
-    if (ata_identify(1, ATA_SLAVE)) {
-        ata_devices[ata_device_count].bus = 1;
-        ata_devices[ata_device_count].drive = ATA_SLAVE;
-        ata_devices[ata_device_count].type = DEVICE_TYPE_ATA;
-        ata_device_count++;
-    }
-    
-    // Вывод информации о найденных устройствах
-    if (ata_device_count > 0) {
-        kprintf("Found %d ATA device(s):\n", ata_device_count);
-        for (int i = 0; i < ata_device_count; i++) {
-            kprintf("%d: %s (%d MB)\n", 
-                i, 
-                ata_devices[i].model,
-                ata_devices[i].size / (1024 * 1024)
-            );
-        }
+    // Проверяем secondary slave
+    if (ata_init_drive(ATA_SECONDARY_BASE, 1) == 0) {
+        drives[3].present = 1;
     }
 }
 
-// Чтение секторов
-int ata_read_sectors(uint8_t device_id, uint32_t lba, uint8_t num_sectors, uint16_t *buffer) {
-    if (device_id >= ata_device_count) return 0;
+// Чтение сектора
+int ata_read_sector(uint8_t drive, uint32_t lba, uint8_t* buffer) {
+    if (drive >= 4 || !drives[drive].present) return -1;
     
-    uint16_t base = ata_devices[device_id].bus ? ATA_SECONDARY_IO : ATA_PRIMARY_IO;
-    uint8_t drive = ata_devices[device_id].drive;
+    uint16_t base = (drive < 2) ? ATA_PRIMARY_BASE : ATA_SECONDARY_BASE;
+    drive = drive % 2;
     
-    if (!ata_wait_busy(base)) return 0;
+    ata_select_drive(base, drive);
     
-    ata_write_lba(base, lba, drive);
-    outb(base + 7, ATA_CMD_READ_PIO);
+    // Устанавливаем параметры чтения
+    outb(base + ATA_SECTOR_COUNT, 1);
+    outb(base + ATA_SECTOR_NUM, lba & 0xFF);
+    outb(base + ATA_CYL_LOW, (lba >> 8) & 0xFF);
+    outb(base + ATA_CYL_HIGH, (lba >> 16) & 0xFF);
+    outb(base + ATA_DRIVE, 0xE0 | (drive << 4) | ((lba >> 24) & 0x0F));
     
-    for (int sector = 0; sector < num_sectors; sector++) {
-        if (!ata_wait_busy(base)) return 0;
-        if (!ata_wait_drq(base)) return 0;
-        
-        for (int i = 0; i < 256; i++) {
-            buffer[sector * 256 + i] = inw(base);
-        }
+    // Отправляем команду чтения
+    outb(base + ATA_COMMAND, ATA_CMD_READ);
+    ata_wait(base);
+    
+    if (ata_check_error(base)) return -1;
+    
+    // Читаем данные через 8-битные порты
+    for (int i = 0; i < 512; i++) {
+        buffer[i] = inb(base + ATA_DATA);
     }
     
-    return 1;
+    return 0;
 }
 
-// Запись секторов
-int ata_write_sectors(uint8_t device_id, uint32_t lba, uint8_t num_sectors, uint16_t *buffer) {
-    if (device_id >= ata_device_count) return 0;
+// Запись сектора
+int ata_write_sector(uint8_t drive, uint32_t lba, uint8_t* buffer) {
+    if (drive >= 4 || !drives[drive].present) return -1;
     
-    uint16_t base = ata_devices[device_id].bus ? ATA_SECONDARY_IO : ATA_PRIMARY_IO;
-    uint8_t drive = ata_devices[device_id].drive;
+    uint16_t base = (drive < 2) ? ATA_PRIMARY_BASE : ATA_SECONDARY_BASE;
+    drive = drive % 2;
     
-    if (!ata_wait_busy(base)) return 0;
+    ata_select_drive(base, drive);
     
-    ata_write_lba(base, lba, drive);
-    outb(base + 7, ATA_CMD_WRITE_PIO);
+    // Устанавливаем параметры записи
+    outb(base + ATA_SECTOR_COUNT, 1);
+    outb(base + ATA_SECTOR_NUM, lba & 0xFF);
+    outb(base + ATA_CYL_LOW, (lba >> 8) & 0xFF);
+    outb(base + ATA_CYL_HIGH, (lba >> 16) & 0xFF);
+    outb(base + ATA_DRIVE, 0xE0 | (drive << 4) | ((lba >> 24) & 0x0F));
     
-    for (int sector = 0; sector < num_sectors; sector++) {
-        if (!ata_wait_busy(base)) return 0;
-        if (!ata_wait_drq(base)) return 0;
-        
-        for (int i = 0; i < 256; i++) {
-            outw(base, buffer[sector * 256 + i]);
-        }
+    // Отправляем команду записи
+    outb(base + ATA_COMMAND, ATA_CMD_WRITE);
+    ata_wait(base);
+    
+    if (ata_check_error(base)) return -1;
+    
+    // Записываем данные через 8-битные порты
+    for (int i = 0; i < 512; i++) {
+        outb(base + ATA_DATA, buffer[i]);
     }
     
-    // Сброс кэша
-    outb(base + 7, ATA_CMD_CACHE_FLUSH);
-    if (!ata_wait_busy(base)) return 0;
-    
-    return 1;
+    return 0;
 }
 
-// Чтение ATAPI устройства
-int atapi_read(uint8_t device_id, uint32_t lba, uint8_t num_sectors, uint16_t *buffer) {
-    if (device_id >= ata_device_count || ata_devices[device_id].type != DEVICE_TYPE_ATAPI) {
-        return 0;
-    }
-    
-    uint16_t base = ata_devices[device_id].bus ? ATA_SECONDARY_IO : ATA_PRIMARY_IO;
-    uint8_t drive = ata_devices[device_id].drive;
-    
-    if (!ata_wait_busy(base)) return 0;
-    
-    ata_write_lba(base, lba, drive);
-    outb(base + 7, ATA_CMD_PACKET);
-    
-    // Отправка команды READ (12)
-    uint8_t packet[12] = {
-        0xA8, 0x00, 0x00, 0x00,
-        (lba >> 24) & 0xFF,
-        (lba >> 16) & 0xFF,
-        (lba >> 8) & 0xFF,
-        lba & 0xFF,
-        num_sectors,
-        0x00, 0x00, 0x00
-    };
-    
-    for (int i = 0; i < 6; i++) {
-        outw(base, packet[i * 2] | (packet[i * 2 + 1] << 8));
-    }
-    
-    for (int sector = 0; sector < num_sectors; sector++) {
-        if (!ata_wait_busy(base)) return 0;
-        if (!ata_wait_drq(base)) return 0;
-        
-        for (int i = 0; i < 256; i++) {
-            buffer[sector * 256 + i] = inw(base);
-        }
-    }
-    
-    return 1;
-}
-
-// Получение количества найденных устройств
-int ata_get_device_count() {
-    return ata_device_count;
-}
-
-// Получение имени устройства
-const char* ata_get_device_name(uint8_t device_id) {
-    if (device_id >= ata_device_count) {
-        return "Unknown";
-    }
-    return ata_devices[device_id].model;
-}
-
-// Получение размера устройства
-uint32_t ata_get_device_size(uint8_t device_id) {
-    if (device_id >= ata_device_count) {
-        return 0;
-    }
-    return ata_devices[device_id].size;
+// Получение информации о диске
+ata_drive_t* ata_get_drive(uint8_t drive) {
+    if (drive >= 4 || !drives[drive].present) return NULL;
+    return &drives[drive];
 } 

@@ -1,8 +1,22 @@
 #include <string.h>
 #include <vga.h>
+#include <idt.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stddef.h>
+
+int getch_scancode = 0;
+int getch_flag = 0;
+
+void getch_handler(struct InterruptRegisters *regs)
+{
+    char scanCode = inb(0x60) & 0x7F;
+	char press = inb(0x60) & 0x80;
+    if (press == 0) {
+        getch_scancode = scanCode;
+        getch_flag = 1;
+    }
+}
 
 char *strcpy(char *dest, const char *src) {
     char *ptr = dest;
@@ -575,4 +589,15 @@ void	memcpy(uint8_t *src, uint8_t *dest, uint32_t bytes)
 		dest[i] = src[i];
 		i++;
 	}
+}
+
+int kgetch() {
+    uint8_t scancode = 0;
+    // Ждём нажатия клавиши (бит 7 не установлен)
+    getch_flag = 0;
+    while (getch_flag == 0) {
+        irq_install_handler(1, &getch_handler);
+    }
+    irq_uninstall_handler(1);
+    return get_acsii_low(getch_scancode);
 }

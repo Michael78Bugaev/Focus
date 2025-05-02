@@ -1,9 +1,14 @@
 #pragma once
+#ifndef STRING_H
+#define STRING_H
 
 #include <stddef.h>
 #include <stdbool.h>
 #include <stdint.h>
 
+extern struct InterruptRegisters *regs;
+
+void getch_handler(struct InterruptRegisters *regs);
 char *strcpy(char *dest, const char *src);
 int strlen(char s[]);
 char *strncpy(char *dest, const char *src, size_t n);
@@ -39,3 +44,5 @@ void itoa(int value, char* str, int base);
 char **split(const char *str, int *count, const char delimeter);
 bool contain(const char *str, char contain);
 void memset(void *dest, char val, uint32_t count);
+int kgetch();
+#endif

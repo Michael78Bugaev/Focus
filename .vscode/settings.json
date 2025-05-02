@@ -4,6 +4,8 @@
         "gdt.h": "c",
         "string.h": "c",
         "vga.h": "c",
-        "idt.h": "c"
+        "idt.h": "c",
+        "fat16.h": "c",
+        "ports.h": "c"
     }
 }
