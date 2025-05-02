@@ -88,30 +88,32 @@ void ata_init() {
 // Чтение сектора
 int ata_read_sector(uint8_t drive, uint32_t lba, uint8_t* buffer) {
     if (drive >= 4 || !drives[drive].present) return -1;
-    
     uint16_t base = (drive < 2) ? ATA_PRIMARY_BASE : ATA_SECONDARY_BASE;
     drive = drive % 2;
-    
+
     ata_select_drive(base, drive);
-    
+
     // Устанавливаем параметры чтения
     outb(base + ATA_SECTOR_COUNT, 1);
     outb(base + ATA_SECTOR_NUM, lba & 0xFF);
     outb(base + ATA_CYL_LOW, (lba >> 8) & 0xFF);
     outb(base + ATA_CYL_HIGH, (lba >> 16) & 0xFF);
     outb(base + ATA_DRIVE, 0xE0 | (drive << 4) | ((lba >> 24) & 0x0F));
-    
+
     // Отправляем команду чтения
     outb(base + ATA_COMMAND, ATA_CMD_READ);
     ata_wait(base);
-    
+
     if (ata_check_error(base)) return -1;
-    
-    // Читаем данные через 8-битные порты
-    for (int i = 0; i < 512; i++) {
-        buffer[i] = inb(base + ATA_DATA);
-    }
-    
+
+    // Читаем данные через rep insw
+    asm volatile (
+        "rep insw"
+        : "+D"(buffer)
+        : "d"(base + ATA_DATA), "c"(256)
+        : "memory"
+    );
+
     return 0;
 }
 
@@ -137,9 +139,10 @@ int ata_write_sector(uint8_t drive, uint32_t lba, uint8_t* buffer) {
     
     if (ata_check_error(base)) return -1;
     
-    // Записываем данные через 8-битные порты
-    for (int i = 0; i < 512; i++) {
-        outb(base + ATA_DATA, buffer[i]);
+    // Записываем данные через 16-битные слова
+    for (int i = 0; i < 256; i++) {
+        uint16_t data = buffer[i*2] | (buffer[i*2+1] << 8);
+        outw(base + ATA_DATA, data);
     }
     
     return 0;

@@ -115,12 +115,6 @@ void shell_execute(char *input)
                 }
                 ide_buf[i/2] = (high << 4) | low;
             }
-            // Переставляем байты для little-endian
-            for (int i = 0; i < 512; i += 2) {
-                uint8_t tmp = ide_buf[i];
-                ide_buf[i] = ide_buf[i+1];
-                ide_buf[i+1] = tmp;
-            }
 
             // Записываем сектора
             for (int i = 0; i < num_sectors; i++) {
@@ -177,26 +171,27 @@ void shell_execute(char *input)
                     return;
                 }
                 
-                // Выводим данные в hex+ascii стиле
+                // Выводим данные в hex+ascii стиле (16 байт на строку)
                 int len = (print_len > 0) ? print_len : 512;
-                for (int j = 0; j < len; j += 8) {
+                for (int j = 0; j < len; j += 16) {
                     kprintf("%04X: ", j);
                     // hex
-                    for (int k = 0; k < 8; k++) {
+                    for (int k = 0; k < 16; k++) {
                         if (j + k < len)
                             kprintf("%02X ", ide_buf[j + k]);
                         else
                             kprint("   ");
                     }
-                    kprint("   ");
+                    kprint("  ");
                     // ascii
-                    for (int k = 0; k < 8; k++) {
+                    for (int k = 0; k < 16; k++) {
                         if (j + k < len) {
                             char c = ide_buf[j + k];
                             if (c >= 32 && c <= 126)
                                 kputchar(c, 0x07);
                             else
                                 kputchar('.', 0x07);
+
                         }
                     }
                     kprint("\n");
