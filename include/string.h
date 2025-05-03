@@ -45,4 +45,5 @@ char **split(const char *str, int *count, const char delimeter);
 bool contain(const char *str, char contain);
 void memset(void *dest, char val, uint32_t count);
 int kgetch();
+char toupper(char c);
 #endif

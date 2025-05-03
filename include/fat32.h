@@ -61,4 +61,7 @@ uint32_t fat32_get_next_cluster(uint8_t drive, uint32_t cluster);
 int fat32_read_dir(uint8_t drive, uint32_t cluster, fat32_dir_entry_t* entries, int max_entries);
 int fat32_read_file(uint8_t drive, uint32_t first_cluster, uint8_t* buf, uint32_t size);
 
+extern uint32_t current_dir_cluster;
+   extern uint32_t root_dir_first_cluster;
+
 #endif // FAT32_H 

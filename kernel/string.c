@@ -601,3 +601,8 @@ int kgetch() {
     irq_uninstall_handler(1);
     return get_acsii_low(getch_scancode);
 }
+
+char toupper(char c) {
+    if (c >= 'a' && c <= 'z') return c - ('a' - 'A');
+    return c;
+}

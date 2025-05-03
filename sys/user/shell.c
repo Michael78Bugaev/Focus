@@ -17,6 +17,35 @@ static char my_toupper(char c) {
     return c;
 }
 
+// Функция для получения строки текущего пути (только для корня и одной вложенной папки)
+static void print_prompt() {
+    extern uint32_t current_dir_cluster;
+    extern uint32_t root_dir_first_cluster;
+    if (current_dir_cluster == root_dir_first_cluster) {
+        kprint("0:\>");
+    } else {
+        // Пробегаем по текущей директории и ищем имя (только для одной вложенности)
+        fat32_dir_entry_t entries[32];
+        int n = fat32_read_dir(0, root_dir_first_cluster, entries, 32);
+        for (int i = 0; i < n; i++) {
+            if ((entries[i].attr & 0x10) == 0x10) {
+                uint32_t cl = ((uint32_t)entries[i].first_cluster_high << 16) | entries[i].first_cluster_low;
+                if (cl == current_dir_cluster) {
+                    char name[9];
+                    int pos = 0;
+                    for (int j = 0; j < 8; j++) {
+                        if (entries[i].name[j] != ' ' && entries[i].name[j] != 0) name[pos++] = entries[i].name[j];
+                    }
+                    name[pos] = 0;
+                    kprintf("0:\\%s>", name);
+                    return;
+                }
+            }
+        }
+        kprint("0:\\?>"); // если не нашли имя
+    }
+}
+
 void shell_execute(char *input)
 {
     int count;
@@ -262,7 +291,7 @@ void shell_execute(char *input)
         else if (strcmp(arg[0], "fatls") == 0)
         {
             fat32_dir_entry_t entries[32];
-            int n = fat32_read_dir(current_disk, 2, entries, 32); // 2 - корневой кластер FAT32
+            int n = fat32_read_dir(current_disk, current_dir_cluster, entries, 32);
             if (n < 0) {
                 kprint("Error read directory\n");
                 return;
@@ -289,11 +318,10 @@ void shell_execute(char *input)
                 if (name[0] == 0) strcpy(name, "(NO NAME)");
                 // Определяем тип: папка, файл или пропустить
                 if ((entries[i].attr & 0x0F) == 0x08) continue; // volume label, skip
-                kprintf("ATTR=%02X ", entries[i].attr);
                 if ((entries[i].attr & 0x10) == 0x10) {
-                    kprintf("<DIR>  %s\n", name);
+                    kprintf(" <DIR>  %s\n", name);
                 } else {
-                    kprintf("<FILE> %s\n", name);
+                    kprintf(" <FILE> %s\n", name);
                 }
             }
             return;
@@ -448,7 +476,6 @@ void shell_execute(char *input)
                         kprint("Error writing root dir\n");
                         return;
                     }
-                    kprint("File created\n");
                     return;
                 }
             }
@@ -488,7 +515,6 @@ void shell_execute(char *input)
                         kprint("Error writing root dir\n");
                         return;
                     }
-                    kprint("Directory created\n");
                     return;
                 }
             }
@@ -524,11 +550,30 @@ void shell_execute(char *input)
                         kprint("Error writing root dir\n");
                         return;
                     }
-                    kprint("Entry deleted\n");
                     return;
                 }
             }
             kprint("Not found\n");
+            return;
+        }
+        else if (strcmp(arg[0], "fatcd") == 0 || strcmp(arg[0], "cd") == 0)
+        {
+            if (count < 2) {
+                kprint("Usage: fatcd <path>\n");
+                return;
+            }
+            int cd_res = fat32_change_dir(current_disk, arg[1]);
+            if (cd_res == 0) {
+                kprintf("Changed directory to %s\n", arg[1]);
+            } else if (cd_res == -1) {
+                kprintf("No such directory: %s\n", arg[1]);
+            } else if (cd_res == -2) {
+                kprintf("Not a directory: %s\n", arg[1]);
+            } else if (cd_res == -3) {
+                kprintf("Already at root directory\n");
+            } else {
+                kprintf("Failed to change directory\n");
+            }
             return;
         }
         else
