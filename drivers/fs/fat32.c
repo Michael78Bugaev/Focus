@@ -7,9 +7,11 @@ static uint32_t fat_start, cluster_begin_lba, sectors_per_fat, root_dir_first_cl
 static uint8_t fat_buffer[512];
 
 int fat32_mount(uint8_t drive) {
-    // Считаем первый сектор (Boot Sector)
-    if (ata_read_sector(drive, 0, (uint8_t*)&fat32_bpb) != 0)
+    uint8_t sector[512];
+    if (ata_read_sector(drive, 0, sector) != 0)
         return -1;
+    for (int i = 0; i < sizeof(fat32_bpb); i++)
+        ((uint8_t*)&fat32_bpb)[i] = sector[i];
 
     sectors_per_fat = fat32_bpb.table_size_32;
     fat_start = fat32_bpb.reserved_sector_count;

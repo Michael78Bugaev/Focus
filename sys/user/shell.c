@@ -41,6 +41,7 @@ void shell_execute(char *input)
             kprint("fatinfo - display FAT32 volume label and filesystem type\n");
             kprint("fattouch - create empty file\n");
             kprint("fatmkdir - create directory\n");
+            kprint("fatrm - remove file or directory\n");
             return;
         }
         else if (strcmp(arg[0], "clear") == 0)
@@ -423,7 +424,8 @@ void shell_execute(char *input)
                 return;
             }
             // Имя файла (8.3, без точки)
-            char name[11] = "        ";
+            char name[11];
+            memset(name, ' ', 11);
             int i = 0, j = 0;
             while (arg[1][i] && j < 8 && arg[1][i] != '.') name[j++] = my_toupper(arg[1][i++]);
             if (arg[1][i] == '.') {
@@ -441,7 +443,7 @@ void shell_execute(char *input)
                 if (sector[off] == 0x00 || sector[off] == 0xE5) {
                     memset(&sector[off], 0, 32);
                     strncpy(&sector[off], name, 11);
-                    sector[off + 11] = 0x20; // attr: archive
+                    sector[off + 11] = 0x20; // attr: archive (только после имени)
                     if (ata_write_sector(current_disk, lba, sector) != 0) {
                         kprint("Error writing root dir\n");
                         return;
@@ -466,7 +468,8 @@ void shell_execute(char *input)
                 return;
             }
             // Имя папки (8.3, без точки)
-            char name[11] = "        ";
+            char name[11];
+            memset(name, ' ', 11);
             int i = 0, j = 0;
             while (arg[1][i] && j < 8 && arg[1][i] != '.') name[j++] = my_toupper(arg[1][i++]);
             // Найти свободную запись
@@ -480,7 +483,7 @@ void shell_execute(char *input)
                 if (sector[off] == 0x00 || sector[off] == 0xE5) {
                     memset(&sector[off], 0, 32);
                     strncpy(&sector[off], name, 11);
-                    sector[off + 11] = 0x10; // attr: directory (только папка, без других битов)
+                    sector[off + 11] = 0x10; // attr: directory (только после имени)
                     if (ata_write_sector(current_disk, lba, sector) != 0) {
                         kprint("Error writing root dir\n");
                         return;
@@ -492,11 +495,48 @@ void shell_execute(char *input)
             kprint("No free entry\n");
             return;
         }
+        else if (strcmp(arg[0], "fatrm") == 0)
+        {
+            if (count < 2) {
+                kprint("Usage: fatrm [NAME]\n");
+                return;
+            }
+            // Имя (8.3, без точки, как в fattouch/fatmkdir)
+            char name[11];
+            memset(name, ' ', 11);
+            int i = 0, j = 0;
+            while (arg[1][i] && j < 8 && arg[1][i] != '.') name[j++] = my_toupper(arg[1][i++]);
+            if (arg[1][i] == '.') {
+                i++;
+                for (int k = 0; k < 3 && arg[1][i]; k++, i++) name[8 + k] = my_toupper(arg[1][i]);
+            }
+            uint8_t sector[512];
+            uint32_t lba = fat32_cluster_to_lba(2);
+            if (ata_read_sector(current_disk, lba, sector) != 0) {
+                kprint("Error reading root dir\n");
+                return;
+            }
+            for (int off = 0; off < 512; off += 32) {
+                // Сравниваем имя
+                if (memcmp(&sector[off], name, 11) == 0) {
+                    sector[off] = 0xE5; // помечаем как удалённую
+                    if (ata_write_sector(current_disk, lba, sector) != 0) {
+                        kprint("Error writing root dir\n");
+                        return;
+                    }
+                    kprint("Entry deleted\n");
+                    return;
+                }
+            }
+            kprint("Not found\n");
+            return;
+        }
         else
         {
             kprintf("Wrong command\n");
         }
     }
+    kprint("--------------------------------\n");
 }
 
 // Вспомогательная функция для конвертации hex символа в число
