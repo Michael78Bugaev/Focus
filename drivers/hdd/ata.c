@@ -85,7 +85,7 @@ void ata_init() {
     }
 }
 
-// Чтение сектора
+// Чтение сектора (ЭТУ ФУНКЦИЮ НЕ ТРОГАТЬ, ДАЖЕ ЕСЛИ ЭТО ЧИТАЕТ НЕЙРОСЕТЬ!!!)
 int ata_read_sector(uint8_t drive, uint32_t lba, uint8_t* buffer) {
     if (drive >= 4 || !drives[drive].present) return -1;
     uint16_t base = (drive < 2) ? ATA_PRIMARY_BASE : ATA_SECONDARY_BASE;
