@@ -38,19 +38,19 @@ typedef struct {
 
 #pragma pack(push, 1)
 typedef struct {
-    uint8_t  name[11];
-    uint8_t  attr;
-    uint8_t  ntres;
-    uint8_t  crt_time_tenth;
-    uint16_t crt_time;
-    uint16_t crt_date;
-    uint16_t last_access_date;
-    uint16_t first_cluster_high;
-    uint16_t write_time;
-    uint16_t write_date;
-    uint16_t first_cluster_low;
-    uint32_t file_size;
-} fat32_dir_entry_t;
+    char name[11];           // 0x00
+    uint8_t attr;            // 0x0B
+    uint8_t ntres;           // 0x0C
+    uint8_t crt_time_tenth;  // 0x0D
+    uint16_t crt_time;       // 0x0E
+    uint16_t crt_date;       // 0x10
+    uint16_t lst_acc_date;   // 0x12
+    uint16_t first_cluster_high; // 0x14
+    uint16_t wrt_time;       // 0x16
+    uint16_t wrt_date;       // 0x18
+    uint16_t first_cluster_low;  // 0x1A
+    uint32_t file_size;      // 0x1C
+} __attribute__((packed)) fat32_dir_entry_t;
 #pragma pack(pop)
 
 _Static_assert(sizeof(fat32_dir_entry_t) == 32, "fat32_dir_entry_t must be 32 bytes");
@@ -62,6 +62,7 @@ int fat32_read_dir(uint8_t drive, uint32_t cluster, fat32_dir_entry_t* entries, 
 int fat32_read_file(uint8_t drive, uint32_t first_cluster, uint8_t* buf, uint32_t size);
 
 extern uint32_t current_dir_cluster;
-   extern uint32_t root_dir_first_cluster;
+extern uint32_t fat_start;
+extern uint32_t root_dir_first_cluster;
 
 #endif // FAT32_H 

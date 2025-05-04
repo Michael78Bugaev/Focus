@@ -67,7 +67,9 @@ int fat32_read_dir(uint8_t drive, uint32_t cluster, fat32_dir_entry_t* entries, 
                 fat32_dir_entry_t* entry = (fat32_dir_entry_t*)&sector[i];
                 if (entry->name[0] == 0x00) return entry_count; // конец каталога
                 if (entry->name[0] == 0xE5) continue; // удалённый
-                strncpy(&entries[entry_count++], entry, 32);
+                for (int b = 0; b < 32; ++b)
+                    ((uint8_t*)&entries[entry_count])[b] = ((uint8_t*)entry)[b];
+                entry_count++;
             }
         }
         cluster = fat32_get_next_cluster(drive, cluster);

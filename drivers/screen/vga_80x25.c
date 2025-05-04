@@ -230,7 +230,7 @@ void ftos(double n, char *buf, int precision) {
 
 void kprintf(const char* format, ...) {
     char c;
-    uint8_t current_color = 0x07; // По умолчанию светло-серый текст на черном фоне
+    uint8_t current_color = 0x0f; // По умолчанию светло-серый текст на черном фоне
     char **arg = (char **) &format;
     int *int_arg;
     char *str_arg;

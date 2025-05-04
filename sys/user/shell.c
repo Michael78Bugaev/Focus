@@ -10,6 +10,9 @@ uint8_t * ide_buf; // Buffer for read/write operations
 
 // Прототипы функций
 uint8_t hex_to_int(char c);
+uint32_t find_free_cluster(uint8_t drive);
+
+extern int build_path(uint32_t cluster, char path[][9], int max_depth);
 
 // Локальная функция для перевода символа в верхний регистр
 static char my_toupper(char c) {
@@ -17,33 +20,49 @@ static char my_toupper(char c) {
     return c;
 }
 
-// Функция для получения строки текущего пути (только для корня и одной вложенной папки)
-static void print_prompt() {
-    extern uint32_t current_dir_cluster;
-    extern uint32_t root_dir_first_cluster;
-    if (current_dir_cluster == root_dir_first_cluster) {
-        kprint("0:\>");
-    } else {
-        // Пробегаем по текущей директории и ищем имя (только для одной вложенности)
-        fat32_dir_entry_t entries[32];
-        int n = fat32_read_dir(0, root_dir_first_cluster, entries, 32);
-        for (int i = 0; i < n; i++) {
-            if ((entries[i].attr & 0x10) == 0x10) {
-                uint32_t cl = ((uint32_t)entries[i].first_cluster_high << 16) | entries[i].first_cluster_low;
-                if (cl == current_dir_cluster) {
-                    char name[9];
-                    int pos = 0;
-                    for (int j = 0; j < 8; j++) {
-                        if (entries[i].name[j] != ' ' && entries[i].name[j] != 0) name[pos++] = entries[i].name[j];
-                    }
-                    name[pos] = 0;
-                    kprintf("0:\\%s>", name);
-                    return;
-                }
+// Поиск имени и родителя по кластеру: возвращает 1 если найдено, 0 если нет
+static int find_name_and_parent(uint32_t search_cluster, uint32_t current_cluster, char* out_name, uint32_t* out_parent) {
+    fat32_dir_entry_t entries[32];
+    int n = fat32_read_dir(0, current_cluster, entries, 32);
+    for (int i = 0; i < n; i++) {
+        if ((entries[i].attr & 0x10) == 0x10) {
+            uint32_t cl = ((uint32_t)entries[i].first_cluster_high << 16) | entries[i].first_cluster_low;
+            char dbgname[9]; int pos = 0;
+            for (int j = 0; j < 8; j++)
+                if (entries[i].name[j] != ' ' && entries[i].name[j] != 0)
+                    dbgname[pos++] = entries[i].name[j];
+            dbgname[pos] = 0;
+            if (cl == search_cluster) {
+                int pos2 = 0;
+                for (int j = 0; j < 8; j++)
+                    if (entries[i].name[j] != ' ' && entries[i].name[j] != 0)
+                        out_name[pos2++] = entries[i].name[j];
+                out_name[pos2] = 0;
+                *out_parent = current_cluster;
+                return 1;
             }
+            if (find_name_and_parent(search_cluster, cl, out_name, out_parent))
+                return 1;
         }
-        kprint("0:\\?>"); // если не нашли имя
     }
+    return 0;
+}
+
+// Строим путь вверх по родителям
+int build_path(uint32_t cluster, char path[][9], int max_depth) {
+    extern uint32_t root_dir_first_cluster;
+    int depth = 0;
+    uint32_t cur = cluster;
+    while (cur != root_dir_first_cluster && depth < max_depth) {
+        char name[9];
+        uint32_t parent = 0;
+        if (!find_name_and_parent(cur, root_dir_first_cluster, name, &parent))
+            break;
+        for (int i = 0; i < 9; i++) path[depth][i] = name[i];
+        cur = parent;
+        depth++;
+    }
+    return depth;
 }
 
 void shell_execute(char *input)
@@ -99,7 +118,7 @@ void shell_execute(char *input)
                 {
                     ata_drive_t* drive = ata_get_drive(new_disk);
                     if (drive && drive->present) {
-                        current_disk = new_disk;
+                    current_disk = new_disk;
                         kprintf("Selected disk %d:\\\n", current_disk);
                     } else {
                         kprint("Disk not present\n");
@@ -288,7 +307,7 @@ void shell_execute(char *input)
             kprintf("Filesystem:   %s\n", type);
             return;
         } 
-        else if (strcmp(arg[0], "fatls") == 0)
+        else if (strcmp(arg[0], "ls") == 0)
         {
             fat32_dir_entry_t entries[32];
             int n = fat32_read_dir(current_disk, current_dir_cluster, entries, 32);
@@ -318,22 +337,23 @@ void shell_execute(char *input)
                 if (name[0] == 0) strcpy(name, "(NO NAME)");
                 // Определяем тип: папка, файл или пропустить
                 if ((entries[i].attr & 0x0F) == 0x08) continue; // volume label, skip
+                uint32_t cl = ((uint32_t)entries[i].first_cluster_high << 16) | entries[i].first_cluster_low;
                 if ((entries[i].attr & 0x10) == 0x10) {
-                    kprintf(" <DIR>  %s\n", name);
+                    kprintf(" <DIR>  %s (cluster=%u)\n", name, cl);
                 } else {
-                    kprintf(" <FILE> %s\n", name);
+                    kprintf(" <FILE> %s (cluster=%u)\n", name, cl);
                 }
             }
             return;
         }
-        else if (strcmp(arg[0], "fatcat") == 0)
+        else if (strcmp(arg[0], "cat") == 0)
         {
             if (count < 2) {
-                kprint("Usage: fatcat [FILENAME]\n");
+                kprint("Usage: cat [FILENAME]\n");
                 return;
             }
             fat32_dir_entry_t entries[32];
-            int n = fat32_read_dir(current_disk, 2, entries, 32);
+            int n = fat32_read_dir(current_disk, current_dir_cluster, entries, 32);
             if (n < 0) {
                 kprint("Error read directory\n");
                 return;
@@ -439,14 +459,14 @@ void shell_execute(char *input)
             kprint("FAT32 created\n");
             return;
         }
-        else if (strcmp(arg[0], "fattouch") == 0)
+        else if (strcmp(arg[0], "touch") == 0)
         {
             if (count < 2) {
-                kprint("Usage: fattouch [FILENAME]\n");
+                kprint("Usage: touch [FILENAME]\n");
                 return;
             }
             fat32_dir_entry_t entries[32];
-            int n = fat32_read_dir(current_disk, 2, entries, 32);
+            int n = fat32_read_dir(current_disk, current_dir_cluster, entries, 32);
             if (n < 0 || n >= 32) {
                 kprint("Directory full or error\n");
                 return;
@@ -462,9 +482,9 @@ void shell_execute(char *input)
             }
             // Найти свободную запись
             uint8_t sector[512];
-            uint32_t lba = fat32_cluster_to_lba(2);
+            uint32_t lba = fat32_cluster_to_lba(current_dir_cluster);
             if (ata_read_sector(current_disk, lba, sector) != 0) {
-                kprint("Error reading root dir\n");
+                kprint("Error reading dir\n");
                 return;
             }
             for (int off = 0; off < 512; off += 32) {
@@ -473,7 +493,7 @@ void shell_execute(char *input)
                     strncpy(&sector[off], name, 11);
                     sector[off + 11] = 0x20; // attr: archive (только после имени)
                     if (ata_write_sector(current_disk, lba, sector) != 0) {
-                        kprint("Error writing root dir\n");
+                        kprint("Error writing dir\n");
                         return;
                     }
                     return;
@@ -482,14 +502,14 @@ void shell_execute(char *input)
             kprint("No free entry\n");
             return;
         }
-        else if (strcmp(arg[0], "fatmkdir") == 0)
+        else if (strcmp(arg[0], "mkdir") == 0)
         {
             if (count < 2) {
-                kprint("Usage: fatmkdir [DIRNAME]\n");
+                kprint("Usage: mkdir [DIRNAME]\n");
                 return;
             }
             fat32_dir_entry_t entries[32];
-            int n = fat32_read_dir(current_disk, 2, entries, 32);
+            int n = fat32_read_dir(current_disk, current_dir_cluster, entries, 32);
             if (n < 0 || n >= 32) {
                 kprint("Directory full or error\n");
                 return;
@@ -501,18 +521,57 @@ void shell_execute(char *input)
             while (arg[1][i] && j < 8 && arg[1][i] != '.') name[j++] = my_toupper(arg[1][i++]);
             // Найти свободную запись
             uint8_t sector[512];
-            uint32_t lba = fat32_cluster_to_lba(2);
+            uint32_t lba = fat32_cluster_to_lba(current_dir_cluster);
             if (ata_read_sector(current_disk, lba, sector) != 0) {
-                kprint("Error reading root dir\n");
+                kprint("Error reading dir\n");
                 return;
             }
+            // 1. Найти свободный кластер для новой папки
+            uint32_t new_cl = find_free_cluster(current_disk);
+            kprintf("find_free_cluster returned: %u\n", new_cl);
+            if (new_cl == 0) {
+                kprint("No free cluster for directory\n");
+                return;
+            }
+            // 2. Пометить кластер как занятый (FAT32: 0x0FFFFFFF)
+            // (очень простая реализация: пишем в FAT)
+            uint32_t fat_lba = fat_start + (new_cl * 4) / 512;
+            uint8_t fat_sec[512];
+            if (ata_read_sector(current_disk, fat_lba, fat_sec) != 0) {
+                kprint("Error reading FAT\n");
+                return;
+            }
+            uint32_t off = (new_cl * 4) % 512;
+            *(uint32_t*)&fat_sec[off] = 0x0FFFFFFF;
+            if (ata_write_sector(current_disk, fat_lba, fat_sec) != 0) {
+                kprint("Error writing FAT\n");
+                return;
+            }
+            // 3. Записать запись директории
             for (int off = 0; off < 512; off += 32) {
                 if (sector[off] == 0x00 || sector[off] == 0xE5) {
                     memset(&sector[off], 0, 32);
-                    strncpy(&sector[off], name, 11);
-                    sector[off + 11] = 0x10; // attr: directory (только после имени)
+                    // Имя
+                    for (int n = 0; n < 11; n++) sector[off + n] = name[n];
+                    sector[off + 11] = 0x10; // attr: directory
+                    // Записываем номер кластера
+                    *(uint16_t*)(&sector[off + 20]) = (uint16_t)((new_cl >> 16) & 0xFFFF); // high
+                    *(uint16_t*)(&sector[off + 26]) = (uint16_t)(new_cl & 0xFFFF); // low
+                    // ОТЛАДКА: дамп сектора
+                    kprint("DIR ENTRY RAW: ");
+                    for (int dbg = 0; dbg < 32; dbg++) {
+                        kprintf("%02X ", sector[off + dbg]);
+                    }
+                    kprint("\n");
                     if (ata_write_sector(current_disk, lba, sector) != 0) {
-                        kprint("Error writing root dir\n");
+                        kprint("Error writing dir\n");
+                        return;
+                    }
+                    // Инициализируем новый кластер пустым
+                    uint8_t newsec[512];
+                    memset(newsec, 0, 512);
+                    if (ata_write_sector(current_disk, fat32_cluster_to_lba(new_cl), newsec) != 0) {
+                        kprint("Error initializing new dir\n");
                         return;
                     }
                     return;
@@ -521,10 +580,10 @@ void shell_execute(char *input)
             kprint("No free entry\n");
             return;
         }
-        else if (strcmp(arg[0], "fatrm") == 0)
+        else if (strcmp(arg[0], "rm") == 0)
         {
             if (count < 2) {
-                kprint("Usage: fatrm [NAME]\n");
+                kprint("Usage: rm [NAME]\n");
                 return;
             }
             // Имя (8.3, без точки, как в fattouch/fatmkdir)
@@ -537,9 +596,9 @@ void shell_execute(char *input)
                 for (int k = 0; k < 3 && arg[1][i]; k++, i++) name[8 + k] = my_toupper(arg[1][i]);
             }
             uint8_t sector[512];
-            uint32_t lba = fat32_cluster_to_lba(2);
+            uint32_t lba = fat32_cluster_to_lba(current_dir_cluster);
             if (ata_read_sector(current_disk, lba, sector) != 0) {
-                kprint("Error reading root dir\n");
+                kprint("Error reading dir\n");
                 return;
             }
             for (int off = 0; off < 512; off += 32) {
@@ -547,7 +606,7 @@ void shell_execute(char *input)
                 if (memcmp(&sector[off], name, 11) == 0) {
                     sector[off] = 0xE5; // помечаем как удалённую
                     if (ata_write_sector(current_disk, lba, sector) != 0) {
-                        kprint("Error writing root dir\n");
+                        kprint("Error writing dir\n");
                         return;
                     }
                     return;
@@ -556,15 +615,15 @@ void shell_execute(char *input)
             kprint("Not found\n");
             return;
         }
-        else if (strcmp(arg[0], "fatcd") == 0 || strcmp(arg[0], "cd") == 0)
+        else if (strcmp(arg[0], "cd") == 0)
         {
             if (count < 2) {
-                kprint("Usage: fatcd <path>\n");
+                kprint("Usage: cd <path>\n");
                 return;
             }
             int cd_res = fat32_change_dir(current_disk, arg[1]);
             if (cd_res == 0) {
-                kprintf("Changed directory to %s\n", arg[1]);
+                return;
             } else if (cd_res == -1) {
                 kprintf("No such directory: %s\n", arg[1]);
             } else if (cd_res == -2) {
@@ -590,4 +649,13 @@ uint8_t hex_to_int(char c) {
     if (c >= 'a' && c <= 'f') return c - 'a' + 10;
     if (c >= 'A' && c <= 'F') return c - 'A' + 10;
     return 0xFF; // Ошибка
+}
+
+// Вспомогательная функция для поиска свободного кластера FAT32
+uint32_t find_free_cluster(uint8_t drive) {
+    for (uint32_t cl = 2; cl < 0x0FFFFFEF; cl++) {
+        uint32_t next = fat32_get_next_cluster(drive, cl);
+        if (next == 0x00000000) return cl;
+    }
+    return 0;
 }
