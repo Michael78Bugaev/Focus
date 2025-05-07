@@ -60,6 +60,10 @@ uint32_t fat32_cluster_to_lba(uint32_t cluster);
 uint32_t fat32_get_next_cluster(uint8_t drive, uint32_t cluster);
 int fat32_read_dir(uint8_t drive, uint32_t cluster, fat32_dir_entry_t* entries, int max_entries);
 int fat32_read_file(uint8_t drive, uint32_t first_cluster, uint8_t* buf, uint32_t size);
+int fat32_write_file(uint8_t drive, const char* path, const uint8_t* buf, uint32_t size);
+int fat32_create_file(uint8_t drive, const char* path);
+int fat32_write_file_data(uint8_t drive, const char* path, const uint8_t* buf, uint32_t size, uint32_t offset);
+int fat32_read_file_data(uint8_t drive, const char* path, uint8_t* buf, uint32_t size, uint32_t offset);
 
 extern uint32_t current_dir_cluster;
 extern uint32_t fat_start;

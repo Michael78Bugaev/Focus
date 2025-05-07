@@ -90,13 +90,13 @@ void handler(struct InterruptRegisters *regs)
             {
                 if (capsOn || capsLock)
                 {
-                    kputchar(get_acsii_high(scanCode), 0x07);
+                    kputchar(get_acsii_high(scanCode), 0x0f);
                     // _globl_cursor.x++;
                     join(input, get_acsii_high(scanCode));
                 }
                 else
                 {
-                    kputchar(get_acsii_low(scanCode), 0x07);
+                    kputchar(get_acsii_low(scanCode), 0x0f);
                     // _globl_cursor.x++;
                     join(input, get_acsii_low(scanCode));
                 }
@@ -193,17 +193,17 @@ void agent_handler(struct InterruptRegisters *regs)
             break;
         case 40:
             if (press)
-                kputchar('*', 0x07);
+                kputchar('*', 0x0f);
                 join(input, '\'');
             break;
         case 0x29:
             if (press)
-                kputchar('*', 0x07);
+                kputchar('*', 0x0f);
                 join(input, '~');
             break;
         case 0x0E:
             if (press == 0)
-                kputchar('*', 0x07);
+                kputchar('*', 0x0f);
                 backspace_func(input);
             break;
         case 0x1C:
@@ -225,12 +225,12 @@ void agent_handler(struct InterruptRegisters *regs)
             {
                 if (capsOn || capsLock)
                 {
-                    kputchar('*', 0x07);
+                    kputchar('*', 0x0f);
                     join(input, get_acsii_high(scanCode));
                 }
                 else
                 {
-                    kputchar('*', 0x07);
+                    kputchar('*', 0x0f);
                     join(input, get_acsii_low(scanCode));
                 }
             }

@@ -21,6 +21,7 @@ void kentr() {
     init_dmem();
     
     ata_init();
+    shell_execute("fatmount");
 
     char *input;
     for (;;)

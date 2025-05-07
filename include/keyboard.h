@@ -72,15 +72,15 @@
 #define KEY_KEYPAD_MUL 0x37
 #define KEY_KEYPAD_Minus 0x4A
 #define KEY_KEYPAD_PLUS 0x4E
-#define KEY_KEYPAD_DIV 0x35
-#define KEY_LEFT 0x4B
-#define KEY_PAGE_DOWN 0x51
-#define KEY_PAGE_UP 0x49
-#define KEY_PRINT_SCREEN 0x37
-#define KEY_RIGHT 0x4D
-#define KEY_SPACE 0x39
-#define KEY_TAB 0x0F
-#define KEY_UP 0x48
+#define KEY_KEYPAD_DIV     0x35
+#define KEY_LEFT           0x4B
+#define KEY_PAGE_DOWN      0x51
+#define KEY_PAGE_UP        0x49
+#define KEY_PRINT_SCREEN   0x37
+#define KEY_RIGHT          0x4D
+#define KEY_SPACE          0x39
+#define KEY_TAB            0x0F
+#define KEY_UP             0x48
 
 struct Key
 {

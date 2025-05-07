@@ -4,17 +4,75 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stddef.h>
+#include <keyboard.h>
+#include <stdarg.h>
 
 int getch_scancode = 0;
 int getch_flag = 0;
+int getchcode;
 
-void getch_handler(struct InterruptRegisters *regs)
-{
-    char scanCode = inb(0x60) & 0x7F;
-	char press = inb(0x60) & 0x80;
+int capsOn = false, capsLock = false, extended = false;
+
+void getch_handler(struct InterruptRegisters *regs) {
+    uint8_t code = inb(0x60);
+    uint8_t scanCode = code & 0x7F;
+    uint8_t press = code & 0x80;
+    
     if (press == 0) {
-        getch_scancode = scanCode;
-        getch_flag = 1;
+        switch (scanCode) {
+            case 0x01: // Escape
+                getch_scancode = 0x1B;  // Возвращаем ASCII код ESC
+                getch_flag = 1;
+                break;
+            case 0x1C: // Enter
+                getch_scancode = 0x0D;  // Возвращаем ASCII код Enter
+                getch_flag = 1;
+                break;
+            case 0x0E: // Backspace
+                getch_scancode = 0x08;  // Возвращаем ASCII код Backspace
+                getch_flag = 1;
+                break;
+            case 0x48: // Up Arrow
+                getch_scancode = 0x80;
+                getch_flag = 1;
+                break;
+            case 0x50: // Down Arrow
+                getch_scancode = 0x81;
+                getch_flag = 1;
+                break;
+            case 0x4B: // Left Arrow
+                getch_scancode = 0x82;
+                getch_flag = 1;
+                break;
+            case 0x4D: // Right Arrow
+                getch_scancode = 0x83;
+                getch_flag = 1;
+                break;
+            case 0x47: // Home
+                getch_scancode = 0x84;
+                getch_flag = 1;
+                break;
+            case 0x4F: // End
+                getch_scancode = 0x85;
+                getch_flag = 1;
+                break;
+            case 0x49: // Page Up
+                getch_scancode = 0x86;
+                getch_flag = 1;
+                break;
+            case 0x51: // Page Down
+                getch_scancode = 0x87;
+                getch_flag = 1;
+                break;
+            case 0x53: // Delete
+                getch_scancode = 0x88;
+                getch_flag = 1;
+                break;
+            default:
+                getch_scancode = scanCode;
+                getch_flag = 1;
+                break;
+        }
     }
 }
 
@@ -592,17 +650,124 @@ void	memcpy(uint8_t *src, uint8_t *dest, uint32_t bytes)
 }
 
 int kgetch() {
-    uint8_t scancode = 0;
-    // Ждём нажатия клавиши (бит 7 не установлен)
     getch_flag = 0;
-    while (getch_flag == 0) {
+    while (getch_flag != 1) {
         irq_install_handler(1, &getch_handler);
     }
-    irq_uninstall_handler(1);
-    return get_acsii_low(getch_scancode);
+
+    // Спецклавиши — возвращаем напрямую
+    if (getch_scancode == 0x1B || getch_scancode == 0x0D || getch_scancode == 0x08 ||
+        (getch_scancode >= 0x80 && getch_scancode <= 0x88)) {
+        return getch_scancode;
+    }
+
+    // Обычные буквы/цифры
+    if (capsOn == true || capsLock == true) {
+        return get_acsii_high(getch_scancode);
+    } else {
+        return get_acsii_low(getch_scancode);
+    }
 }
 
 char toupper(char c) {
     if (c >= 'a' && c <= 'z') return c - ('a' - 'A');
     return c;
+}
+
+int ksnprintf(char* str, size_t size, const char* format, ...) {
+    va_list args;
+    va_start(args, format);
+    
+    int written = 0;
+    char* dest = str;
+    const char* src = format;
+    
+    while (*src && written < size - 1) {
+        if (*src == '%') {
+            src++;
+            switch (*src) {
+                case 's': {
+                    const char* s = va_arg(args, const char*);
+                    while (*s && written < size - 1) {
+                        *dest++ = *s++;
+                        written++;
+                    }
+                    break;
+                }
+                case 'd': {
+                    int num = va_arg(args, int);
+                    char num_str[32];
+                    int num_len = 0;
+                    int is_neg = 0;
+                    
+                    if (num < 0) {
+                        is_neg = 1;
+                        num = -num;
+                    }
+                    
+                    if (num == 0) {
+                        num_str[num_len++] = '0';
+                    } else {
+                        while (num > 0) {
+                            num_str[num_len++] = '0' + (num % 10);
+                            num /= 10;
+                        }
+                    }
+                    
+                    if (is_neg && written < size - 1) {
+                        *dest++ = '-';
+                        written++;
+                    }
+                    
+                    while (num_len > 0 && written < size - 1) {
+                        *dest++ = num_str[--num_len];
+                        written++;
+                    }
+                    break;
+                }
+                case 'x': {
+                    unsigned int num = va_arg(args, unsigned int);
+                    char hex_str[32];
+                    int hex_len = 0;
+                    
+                    if (num == 0) {
+                        hex_str[hex_len++] = '0';
+                    } else {
+                        while (num > 0) {
+                            char digit = num % 16;
+                            hex_str[hex_len++] = (digit < 10) ? '0' + digit : 'a' + (digit - 10);
+                            num /= 16;
+                        }
+                    }
+                    
+                    while (hex_len > 0 && written < size - 1) {
+                        *dest++ = hex_str[--hex_len];
+                        written++;
+                    }
+                    break;
+                }
+                case '%': {
+                    if (written < size - 1) {
+                        *dest++ = '%';
+                        written++;
+                    }
+                    break;
+                }
+                default:
+                    if (written < size - 1) {
+                        *dest++ = *src;
+                        written++;
+                    }
+                    break;
+            }
+        } else {
+            *dest++ = *src;
+            written++;
+        }
+        src++;
+    }
+    
+    *dest = '\0';
+    va_end(args);
+    return written;
 }
