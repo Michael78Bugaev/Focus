@@ -67,8 +67,35 @@ int build_path(uint32_t cluster, char path[][9], int max_depth) {
 
 // Выполнить .fsc файл как скрипт
 void shell_execute_fsc(const char* fname) {
+    fat32_dir_entry_t entries[32];
+    int n = fat32_read_dir(current_disk, current_dir_cluster, entries, 32);
+    char fatname[12];
+    memset(fatname, ' ', 11);
+    fatname[11] = 0;
+    int clen = strlen(fname);
+    int dot = -1;
+    for (int i = 0; i < clen; i++) if (fname[i] == '.') { dot = i; break; }
+    if (dot == -1) {
+        for (int i = 0; i < clen && i < 8; i++) fatname[i] = toupper(fname[i]);
+    } else {
+        for (int i = 0; i < dot && i < 8; i++) fatname[i] = toupper(fname[i]);
+        for (int i = dot + 1, j = 8; i < clen && j < 11; i++, j++) fatname[j] = toupper(fname[i]);
+    }
+    int found = 0;
+    uint32_t cl = 0;
+    for (int i = 0; i < n; i++) {
+        if (strncmp(entries[i].name, fatname, 11) == 0) {
+            cl = ((uint32_t)entries[i].first_cluster_high << 16) | entries[i].first_cluster_low;
+            found = 1;
+            break;
+        }
+    }
+    if (!found) {
+        kprintf("Cannot read script: %s\n", fname);
+        return;
+    }
     char buffer[MAX_FILE_SIZE];
-    int size = fat32_read_file(0, 0, (uint8_t*)buffer, MAX_FILE_SIZE-1);
+    int size = fat32_read_file(current_disk, cl, (uint8_t*)buffer, MAX_FILE_SIZE-1);
     if (size <= 0) {
         kprintf("Cannot read script: %s\n", fname);
         return;
@@ -76,7 +103,6 @@ void shell_execute_fsc(const char* fname) {
     buffer[size] = 0;
     char* line = strtok(buffer, "\n");
     while (line) {
-        // Пропускать пустые строки и комментарии
         while (*line == ' ' || *line == '\t') line++;
         if (*line && *line != '#') {
             shell_execute(line);
@@ -117,6 +143,7 @@ void shell_execute(char *input)
             kprint("fatrm - remove file or directory\n");
             kprint("edit <filename> - edit file\n");
             kprint("reboot - reboot the system\n");
+            kprint("shutdown - shut down the system\n");
             return;
         }
         else if (strcmp(arg[0], "clear") == 0)
@@ -818,8 +845,12 @@ void shell_execute(char *input)
         }
         else if (strcmp(arg[0], "reboot") == 0)
         {
-            kprint("Rebooting...\n");
-            system_reboot();
+            reboot_system();
+            return;
+        }
+        else if (strcmp(arg[0], "shutdown") == 0)
+        {
+            shutdown_system();
             return;
         }
         else
@@ -891,17 +922,4 @@ void rm_recursive(uint8_t drive, uint32_t cluster) {
             }
         }
     }
-}
-
-// Функция для перезагрузки системы (QEMU, VMware, реальное железо)
-void system_reboot() {
-    __asm__ __volatile__ (
-        "cli\n\t"
-        "mov $0xFE, %%al\n\t"
-        "out %%al, $0x64\n\t"
-        "hlt\n\t"
-        :
-        :
-        : "al"
-    );
 }
