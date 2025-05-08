@@ -262,11 +262,21 @@ void kprintf(const char* format, ...) {
 
         c = *format++;
         int width = 0; // Инициализируем ширину
+        int precision = -1; // По умолчанию precision не задан
 
         // Обработка ширины
         while (c >= '0' && c <= '9') {
             width = width * 10 + (c - '0'); // Собираем число
-            c = *format++; // Переходим к следующему символу
+            c = *format++;
+        }
+        // Обработка precision
+        if (c == '.') {
+            c = *format++;
+            precision = 0;
+            while (c >= '0' && c <= '9') {
+                precision = precision * 10 + (c - '0');
+                c = *format++;
+            }
         }
 
         switch (c) {
@@ -319,12 +329,16 @@ void kprintf(const char* format, ...) {
                 kputchar((char)(*int_arg), current_color);
                 break;
 
-            case 's':
+            case 's': {
                 str_arg = *(char **)arg++;
-                while (*str_arg) {
-                    kputchar(*str_arg++, current_color);
+                int slen = strlen(str_arg);
+                int to_print = slen;
+                if (precision >= 0 && precision < slen) to_print = precision;
+                for (int i = 0; i < to_print; i++) {
+                    kputchar(str_arg[i], current_color);
                 }
                 break;
+            }
 
             case 'f': {
                 double_arg = *(double *)arg++;

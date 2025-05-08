@@ -12,11 +12,19 @@ int getch_flag = 0;
 int getchcode;
 
 int capsOn = false, capsLock = false, extended = false;
+int shiftOn = 0;
 
 void getch_handler(struct InterruptRegisters *regs) {
     uint8_t code = inb(0x60);
     uint8_t scanCode = code & 0x7F;
     uint8_t press = code & 0x80;
+    
+    // Обработка Shift
+    if (scanCode == 0x2A || scanCode == 0x36) { // Shift
+        if (!press) shiftOn = 1;
+        else shiftOn = 0;
+        return;
+    }
     
     if (press == 0) {
         switch (scanCode) {
@@ -662,7 +670,7 @@ int kgetch() {
     }
 
     // Обычные буквы/цифры
-    if (capsOn == true || capsLock == true) {
+    if (shiftOn || capsOn || capsLock) {
         return get_acsii_high(getch_scancode);
     } else {
         return get_acsii_low(getch_scancode);

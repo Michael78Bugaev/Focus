@@ -5,6 +5,8 @@
 #include <string.h>
 #include <stdint.h>
 
+#define KEY_APOSTROPHE 0x28
+
 bool capsLock = false;
 bool enter = false;
 bool capsOn = false;
@@ -52,15 +54,21 @@ void handler(struct InterruptRegisters *regs)
                 capsLock = false;
             }
             break;
-        case 40:
-            if (press)
-                kprint("\'");
-                join(input, '\'');
-            break;
         case 0x29:
             if (press)
                 kprint("~");
                 join(input, '~');
+            break;
+        case KEY_APOSTROPHE:
+            if (press == 0) {
+                if (capsOn || capsLock) {
+                    kputchar('"', 0x0f);
+                    join(input, '"');
+                } else {
+                    kputchar('\'', 0x0f);
+                    join(input, '\'');
+                }
+            }
             break;
         case 0x0E:
             if (press == 0)
@@ -84,6 +92,17 @@ void handler(struct InterruptRegisters *regs)
             break;
         case 0x0F:
             if (press);
+            break;
+        case KEY_SQUARE_CLOSE_BRACKET:
+            if (press == 0) {
+                if (capsOn || capsLock) {
+                    kputchar('}', 0x0f);
+                    join(input, '}');
+                } else {
+                    kputchar(']', 0x0f);
+                    join(input, ']');
+                }
+            }
             break;
         default:
             if (press == 0)
@@ -191,11 +210,6 @@ void agent_handler(struct InterruptRegisters *regs)
                 capsLock = false;
             }
             break;
-        case 40:
-            if (press)
-                kputchar('*', 0x0f);
-                join(input, '\'');
-            break;
         case 0x29:
             if (press)
                 kputchar('*', 0x0f);
@@ -219,6 +233,17 @@ void agent_handler(struct InterruptRegisters *regs)
             break;
         case 0x0F:
             if (press);
+            break;
+        case KEY_SQUARE_CLOSE_BRACKET:
+            if (press == 0) {
+                if (capsOn || capsLock) {
+                    kputchar('}', 0x0f);
+                    join(input, '}');
+                } else {
+                    kputchar(']', 0x0f);
+                    join(input, ']');
+                }
+            }
             break;
         default:
             if (press == 0)
@@ -335,6 +360,8 @@ char get_acsii_low(char code)
     return '/';
   case KEY_SPACE:
     return ' ';
+  case KEY_APOSTROPHE:
+    return '\'';
   default:
     return 0;
   }
@@ -435,6 +462,8 @@ char get_acsii_high(char code)
     return '?';
   case KEY_SPACE:
     return ' ';
+  case KEY_APOSTROPHE:
+    return '\'';
   default:
     return 0;
   }

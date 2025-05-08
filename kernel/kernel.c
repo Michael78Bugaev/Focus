@@ -1,6 +1,5 @@
 #include <stdint.h>
 #include <gdt.h>
-#include <kernel.h>
 #include <vga.h>
 #include <idt.h>
 #include <fat32.h>

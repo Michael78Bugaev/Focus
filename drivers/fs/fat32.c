@@ -78,6 +78,10 @@ int fat32_read_dir(uint8_t drive, uint32_t cluster, fat32_dir_entry_t* entries, 
 }
 
 int fat32_read_file(uint8_t drive, uint32_t first_cluster, uint8_t* buf, uint32_t size) {
+    //kprintf("READ: first_cluster = %u, size = %u\n", first_cluster, size);
+    // Проверяем, что кластер валидный
+    if (first_cluster < 2 || first_cluster >= 0x0FFFFFEF) return -1;
+    
     uint32_t cluster = first_cluster;
     uint32_t bytes_read = 0;
     uint8_t sector[512];
@@ -87,7 +91,9 @@ int fat32_read_file(uint8_t drive, uint32_t first_cluster, uint8_t* buf, uint32_
             if (ata_read_sector(drive, lba, sector) != 0)
                 return -1;
             uint32_t to_copy = (size - bytes_read > 512) ? 512 : (size - bytes_read);
-            strncpy(buf + bytes_read, sector, to_copy);
+            for (uint32_t i = 0; i < to_copy; i++) {
+                buf[bytes_read + i] = sector[i];
+            }
             bytes_read += to_copy;
             if (bytes_read >= size) break;
         }
@@ -223,7 +229,11 @@ int fat32_write_file(uint8_t drive, const char* path, const uint8_t* buf, uint32
     for (int i = 0; i < n; i++) {
         int match = 1;
         for (int k = 0; k < 11; k++) if (fatname[k] != entries[i].name[k]) { match = 0; break; }
-        if (match) { file_idx = i; break; }
+        if (match) { 
+            if (entries[i].attr & 0x10) return -1; // Это директория
+            file_idx = i; 
+            break; 
+        }
     }
     uint32_t first_cluster = 0;
     if (file_idx == -1) {
@@ -256,14 +266,14 @@ int fat32_write_file(uint8_t drive, const char* path, const uint8_t* buf, uint32
         sector[off + 11] = 0x20; // attr: archive
         *(uint16_t*)(&sector[off + 20]) = (uint16_t)((cl >> 16) & 0xFFFF); // high
         *(uint16_t*)(&sector[off + 26]) = (uint16_t)(cl & 0xFFFF); // low
-        *(uint32_t*)(&sector[off + 28]) = size;
+        *(uint32_t*)(&sector[off + 28]) = 0; // file size = 0
         if (ata_write_sector(drive, lba, sector) != 0) return -6;
         first_cluster = cl;
     } else {
         // Файл найден, перезаписываем
         first_cluster = ((uint32_t)entries[file_idx].first_cluster_high << 16) | entries[file_idx].first_cluster_low;
-        // (Для простоты не реализуем очистку старых кластеров)
     }
+    //kprintf("WRITE: first_cluster = %u, size = %u\n", first_cluster, size);
     // 2. Записать данные в кластеры
     uint32_t cluster = first_cluster;
     uint32_t bytes_written = 0;
@@ -273,7 +283,9 @@ int fat32_write_file(uint8_t drive, const char* path, const uint8_t* buf, uint32
             uint32_t lba = fat32_cluster_to_lba(cluster) + s;
             uint32_t to_write = (size - bytes_written > 512) ? 512 : (size - bytes_written);
             memset(sector, 0, 512);
-            strncpy((void*)buf + bytes_written, sector, to_write);
+            for (uint32_t i = 0; i < to_write; i++) {
+                sector[i] = buf[bytes_written + i];
+            }
             if (ata_write_sector(drive, lba, sector) != 0) return -7;
             bytes_written += to_write;
             if (bytes_written >= size) break;
@@ -281,6 +293,19 @@ int fat32_write_file(uint8_t drive, const char* path, const uint8_t* buf, uint32
         // Для простоты не поддерживаем цепочки кластеров (только один кластер на файл)
         break;
     }
+    // 3. Обновить размер файла в записи каталога
+    uint8_t dir_sector[512];
+    uint32_t dir_lba = fat32_cluster_to_lba(current_dir_cluster);
+    if (ata_read_sector(drive, dir_lba, dir_sector) != 0) return -8;
+    int off = -1;
+    for (int i = 0; i < 512; i += 32) {
+        int match = 1;
+        for (int k = 0; k < 11; k++) if (fatname[k] != dir_sector[i+k]) { match = 0; break; }
+        if (match) { off = i; break; }
+    }
+    if (off == -1) return -9;
+    *(uint32_t*)(&dir_sector[off + 28]) = bytes_written;
+    if (ata_write_sector(drive, dir_lba, dir_sector) != 0) return -10;
     return bytes_written;
 }
 

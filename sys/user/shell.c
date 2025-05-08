@@ -1,5 +1,4 @@
 #include <stdint.h>
-#include <kernel.h>
 #include <mem.h>
 #include <string.h>
 #include <ata.h>
@@ -66,6 +65,26 @@ int build_path(uint32_t cluster, char path[][9], int max_depth) {
     return depth;
 }
 
+// Выполнить .fsc файл как скрипт
+void shell_execute_fsc(const char* fname) {
+    char buffer[MAX_FILE_SIZE];
+    int size = fat32_read_file(0, 0, (uint8_t*)buffer, MAX_FILE_SIZE-1);
+    if (size <= 0) {
+        kprintf("Cannot read script: %s\n", fname);
+        return;
+    }
+    buffer[size] = 0;
+    char* line = strtok(buffer, "\n");
+    while (line) {
+        // Пропускать пустые строки и комментарии
+        while (*line == ' ' || *line == '\t') line++;
+        if (*line && *line != '#') {
+            shell_execute(line);
+        }
+        line = strtok(NULL, "\n");
+    }
+}
+
 void shell_execute(char *input)
 {
     int count;
@@ -73,6 +92,11 @@ void shell_execute(char *input)
 
     if (count > 0)
     {
+        int len = strlen(arg[0]);
+        if (len > 4 && strcmp(arg[0] + len - 4, ".fsc") == 0) {
+            shell_execute_fsc(arg[0]);
+            return;
+        }
         if (strcmp(arg[0], "help") == 0)
         {
             kprint("Available commands:\n");
@@ -92,6 +116,7 @@ void shell_execute(char *input)
             kprint("fatmkdir - create directory\n");
             kprint("fatrm - remove file or directory\n");
             kprint("edit <filename> - edit file\n");
+            kprint("reboot - reboot the system\n");
             return;
         }
         else if (strcmp(arg[0], "clear") == 0)
@@ -311,7 +336,7 @@ void shell_execute(char *input)
         } 
         else if (strcmp(arg[0], "ls") == 0)
         {
-            // Forcefully reread directory
+            kprintf("\n");
             fat32_dir_entry_t entries[32];
             int n = fat32_read_dir(current_disk, current_dir_cluster, entries, 32);
             if (n < 0) {
@@ -319,21 +344,7 @@ void shell_execute(char *input)
                 return;
             }
             for (int i = 0; i < n; i++) {
-                if (entries[i].name[0] == 0xE5) {
-                    // Physically erase record in directory
-                    uint32_t lba = fat32_cluster_to_lba(current_dir_cluster);
-                    uint8_t sector[512];
-                    if (ata_read_sector(current_disk, lba, sector) == 0) {
-                        for (int off = 0; off < 512; off += 32) {
-                            if (memcmp(&sector[off], entries[i].name, 11) == 0) {
-                                memset(&sector[off], 0, 32);
-                                ata_write_sector(current_disk, lba, sector);
-                                break;
-                            }
-                        }
-                    }
-                    continue;
-                }
+                if (entries[i].name[0] == 0xE5) continue;
                 char name[13] = {0};
                 int pos = 0;
                 // Name (8 characters)
@@ -354,14 +365,22 @@ void shell_execute(char *input)
                 }
                 name[pos] = 0;
                 if ((unsigned char)name[0] == 0xE5 || name[0] == 0) continue; // don't output if E5 or empty
-                // Determine type: folder, file or skip
-                if ((entries[i].attr & 0x0F) == 0x08) continue; // volume label, skip
-                uint32_t cl = ((uint32_t)entries[i].first_cluster_high << 16) | entries[i].first_cluster_low;
+                // Пропускаем volume label
+                if ((entries[i].attr & 0x0F) == 0x08) continue;
                 if ((entries[i].attr & 0x10) == 0x10) {
-                    kprintf(" <DIR>  %s (cluster=%u)\n", name, cl);
+                    // Директория: считаем количество записей
+                    fat32_dir_entry_t subentries[32];
+                    int subn = fat32_read_dir(current_disk, ((uint32_t)entries[i].first_cluster_high << 16) | entries[i].first_cluster_low, subentries, 32);
+                    if (subn < 0) subn = 0;
+                    kprintf(" <DIR>  %s (%d entries)\n", name, subn);
                 } else {
-                    if (name[0] != 0xE5 && name[0] != 0) {
-                        kprintf(" <FILE> %s (cluster=%u)\n", name, cl);
+                    uint32_t size = entries[i].file_size;
+                    if (size < 1024*1024) {
+                        kprintf(" <FILE> %s (%u bytes)\n", name, size);
+                    } else {
+                        uint32_t mb = size / (1024*1024);
+                        uint32_t kb = (size % (1024*1024)) / 1024;
+                        kprintf(" <FILE> %s (%u.%u MB)\n", name, mb, kb/100);
                     }
                 }
             }
@@ -380,15 +399,21 @@ void shell_execute(char *input)
                 return;
             }
             char *filename = arg[1];
+            // --- преобразуем имя в 8.3 формат FAT ---
+            char fatname[12];
+            memset(fatname, ' ', 11);
+            fatname[11] = 0;
+            int clen = strlen(filename);
+            int dot = -1;
+            for (int i = 0; i < clen; i++) if (filename[i] == '.') { dot = i; break; }
+            if (dot == -1) {
+                for (int i = 0; i < clen && i < 8; i++) fatname[i] = toupper(filename[i]);
+            } else {
+                for (int i = 0; i < dot && i < 8; i++) fatname[i] = toupper(filename[i]);
+                for (int i = dot + 1, j = 8; i < clen && j < 11; i++, j++) fatname[j] = toupper(filename[i]);
+            }
             for (int i = 0; i < n; i++) {
-                char name[12];
-                strncpy(name, entries[i].name, 11);
-                name[11] = 0;
-                for (int j = 10; j >= 0; j--) {
-                    if (name[j] == ' ') name[j] = 0;
-                    else break;
-                }
-                if (strcmp(name, filename) == 0) {
+                if (strncmp(entries[i].name, fatname, 11) == 0) {
                     uint32_t cluster = ((uint32_t)entries[i].first_cluster_high << 16) | entries[i].first_cluster_low;
                     uint32_t size = entries[i].file_size;
                     uint8_t buf[1024];
@@ -525,6 +550,27 @@ void shell_execute(char *input)
                     memset(&new_sector[off], ' ', 11);
                     for (int n = 0; n < 11; n++) new_sector[off + n] = name[n];
                     new_sector[off + 11] = 0x20; // attr: archive
+                    // --- Выделяем свободный кластер и записываем его ---
+                    uint32_t cl = find_free_cluster(current_disk);
+                    if (cl == 0) {
+                        kprint("No free cluster\n");
+                        return;
+                    }
+                    uint32_t fat_lba = fat_start + (cl * 4) / 512;
+                    uint8_t fat_sec[512];
+                    if (ata_read_sector(current_disk, fat_lba, fat_sec) != 0) {
+                        kprint("Error reading FAT\n");
+                        return;
+                    }
+                    uint32_t fat_off = (cl * 4) % 512;
+                    *(uint32_t*)&fat_sec[fat_off] = 0x0FFFFFFF;
+                    if (ata_write_sector(current_disk, fat_lba, fat_sec) != 0) {
+                        kprint("Error writing FAT\n");
+                        return;
+                    }
+                    *(uint16_t*)(&new_sector[off + 20]) = (uint16_t)((cl >> 16) & 0xFFFF); // high
+                    *(uint16_t*)(&new_sector[off + 26]) = (uint16_t)(cl & 0xFFFF); // low
+                    // --- конец исправления ---
                     // Write updated sector
                     if (ata_write_sector(current_disk, lba, new_sector) != 0) {
                         kprint("Error writing dir\n");
@@ -770,9 +816,19 @@ void shell_execute(char *input)
             editor_main(arg[1]);
             return;
         }
+        else if (strcmp(arg[0], "reboot") == 0)
+        {
+            kprint("Rebooting...\n");
+            system_reboot();
+            return;
+        }
         else
         {
-            kprintf("Wrong command\n");
+            if (startsWith(arg[0], "#"));
+            else
+            {
+                kprintf("%s: command or executable file not found\n", arg[0]);
+            }
         }
     }
 }
@@ -835,4 +891,17 @@ void rm_recursive(uint8_t drive, uint32_t cluster) {
             }
         }
     }
+}
+
+// Функция для перезагрузки системы (QEMU, VMware, реальное железо)
+void system_reboot() {
+    __asm__ __volatile__ (
+        "cli\n\t"
+        "mov $0xFE, %%al\n\t"
+        "out %%al, $0x64\n\t"
+        "hlt\n\t"
+        :
+        :
+        : "al"
+    );
 }
