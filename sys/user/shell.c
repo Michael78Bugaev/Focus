@@ -144,6 +144,8 @@ void shell_execute(char *input)
             kprint("edit <filename> - edit file\n");
             kprint("reboot - reboot the system\n");
             kprint("shutdown - shut down the system\n");
+            kprint("sleep [milliseconds] - sleep for a specified amount of time\n");
+            kprint("echo [message] - print a message\n");
             return;
         }
         else if (strcmp(arg[0], "clear") == 0)
@@ -851,6 +853,54 @@ void shell_execute(char *input)
         else if (strcmp(arg[0], "shutdown") == 0)
         {
             shutdown_system();
+            return;
+        }
+        else if (strcmp(arg[0], "sleep") == 0)
+        {
+            if (count < 2) {
+                kprint("Usage: sleep [milliseconds]\n");
+                return;
+            }
+            int ms = atoi(arg[1]);
+            if (ms <= 0) {
+                kprint("Error: milliseconds must be positive\n");
+                return;
+            }
+            pit_sleep(ms);
+            return;
+        }
+        else if (strcmp(arg[0], "echo") == 0)
+        {
+            if (count < 2) {
+                kprint("Usage: echo [message]\n");
+                return;
+            }
+            
+            // Собираем все аргументы в одну строку
+            char message[256] = {0};
+            int pos = 0;
+            
+            for (int i = 1; i < count; i++) {
+                // Копируем аргумент
+                int j = 0;
+                while (arg[i][j] && pos < 255) {
+                    message[pos++] = arg[i][j++];
+                }
+                // Добавляем пробел между аргументами
+                if (i < count - 1 && pos < 255) {
+                    message[pos++] = ' ';
+                }
+            }
+            message[pos] = '\n';
+            message[pos + 1] = 0;
+            
+            kprint(message);
+            return;
+        }
+        else if (strcmp(arg[0], "pause") == 0)
+        {
+            kprint("Press any key to continue...\n");
+            kgetch();
             return;
         }
         else

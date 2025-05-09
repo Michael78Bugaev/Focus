@@ -463,7 +463,7 @@ char get_acsii_high(char code)
   case KEY_SPACE:
     return ' ';
   case KEY_APOSTROPHE:
-    return '\'';
+    return '"';
   default:
     return 0;
   }

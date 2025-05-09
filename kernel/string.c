@@ -21,8 +21,16 @@ void getch_handler(struct InterruptRegisters *regs) {
     
     // Обработка Shift
     if (scanCode == 0x2A || scanCode == 0x36) { // Shift
-        if (!press) shiftOn = 1;
-        else shiftOn = 0;
+        if (!press) {
+            shiftOn = 1; 
+            capsOn = 1; 
+            capsLock = 1;
+        }
+        else {
+            shiftOn = 0;
+            capsOn = 0;
+            capsLock = 0;
+        }
         return;
     }
     
@@ -35,52 +43,52 @@ void getch_handler(struct InterruptRegisters *regs) {
             case 0x1C: // Enter
                 getch_scancode = 0x0D;  // Возвращаем ASCII код Enter
                 getch_flag = 1;
-                break;
+            break;
             case 0x0E: // Backspace
                 getch_scancode = 0x08;  // Возвращаем ASCII код Backspace
                 getch_flag = 1;
-                break;
+            break;
             case 0x48: // Up Arrow
                 getch_scancode = 0x80;
                 getch_flag = 1;
-                break;
+            break;
             case 0x50: // Down Arrow
                 getch_scancode = 0x81;
                 getch_flag = 1;
-                break;
+            break;
             case 0x4B: // Left Arrow
                 getch_scancode = 0x82;
                 getch_flag = 1;
-                break;
+            break;
             case 0x4D: // Right Arrow
                 getch_scancode = 0x83;
                 getch_flag = 1;
-                break;
+            break;
             case 0x47: // Home
                 getch_scancode = 0x84;
                 getch_flag = 1;
-                break;
+            break;
             case 0x4F: // End
                 getch_scancode = 0x85;
                 getch_flag = 1;
-                break;
+            break;
             case 0x49: // Page Up
                 getch_scancode = 0x86;
                 getch_flag = 1;
-                break;
+            break;
             case 0x51: // Page Down
                 getch_scancode = 0x87;
                 getch_flag = 1;
-                break;
+            break;
             case 0x53: // Delete
                 getch_scancode = 0x88;
                 getch_flag = 1;
-                break;
-            default:
+            break;
+        default:
                 getch_scancode = scanCode;
                 getch_flag = 1;
                 break;
-        }
+            }
     }
 }
 
@@ -671,10 +679,10 @@ int kgetch() {
 
     // Обычные буквы/цифры
     if (shiftOn || capsOn || capsLock) {
-        return get_acsii_high(getch_scancode);
+            return get_acsii_high(getch_scancode);
     } else {
-        return get_acsii_low(getch_scancode);
-    }
+            return get_acsii_low(getch_scancode);
+        }
 }
 
 char toupper(char c) {
