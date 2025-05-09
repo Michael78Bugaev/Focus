@@ -806,3 +806,14 @@ char* strstr(const char* haystack, const char* needle) {
     }
     return NULL; // Не найдено
 }
+
+int strncasecmp(const char* s1, const char* s2, int n) {
+    for (int i = 0; i < n; i++) {
+        char c1 = s1[i], c2 = s2[i];
+        if (c1 >= 'A' && c1 <= 'Z') c1 += 'a' - 'A';
+        if (c2 >= 'A' && c2 <= 'Z') c2 += 'a' - 'A';
+        if (c1 != c2) return c1 - c2;
+        if (c1 == 0) break;
+    }
+    return 0;
+}

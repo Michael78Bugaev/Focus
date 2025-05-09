@@ -55,7 +55,7 @@ kernel: $(C_OBJECTS) $(ASM_OBJECTS)
 	@$(LD) $(LDFLAGS) -o $(BUILD_DIR)/kernel $^
 	@cp $(BUILD_DIR)/kernel ./iso/boot/
 	@grub-mkrescue -o focusos.iso ./iso
-	#@qemu-system-i386 -m 1024M -drive file=hda.img,format=raw,if=ide -cdrom focusos.iso -boot d
+	@qemu-system-i386 -m 1500M -drive file=hda.img,format=raw,if=ide -cdrom focusos.iso -boot d
 
 # Цель для очистки
 clean:

@@ -22,6 +22,7 @@ typedef enum {
     OP_LABEL,
     OP_HLT,
     OP_STRLD, // печать строки
+    OP_CHRLD, // печать символа (цвет из AH, символ из AL)
     OP_RET    // возврат
 } Opcode; 
 

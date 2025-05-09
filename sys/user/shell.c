@@ -5,6 +5,7 @@
 #include <fat32.h>
 #include "edit.c"
 #include <fcsasm.h>
+#include <fcs_vm.h>
 
 int current_disk = 0;
 uint8_t * ide_buf; // Buffer for read/write operations
@@ -127,27 +128,28 @@ void shell_execute(char *input)
         if (strcmp(arg[0], "help") == 0)
         {
             kprint("Available commands:\n");
-            kprint("help - show this help\n");
-            kprint("clear - clear screen\n");
-            kprint("disk [n] - select disk (0-3)\n");
-            kprint("read (-l length) [lba] - read sector\n");
-            kprint("write [lba] [-h |-t] [data] - write data\n");
-            kprint("bootsec - create boot sector\n");
-            kprint("list - list available disks\n");
-            kprint("fatmount - mount FAT32 partition\n");
-            kprint("fatls - list files in FAT32 root directory\n");
-            kprint("fatcat - display file content\n");
-            kprint("fatmkfs - create FAT32 filesystem\n");
-            kprint("fatinfo - display FAT32 volume label and filesystem type\n");
-            kprint("fattouch - create empty file\n");
-            kprint("fatmkdir - create directory\n");
-            kprint("fatrm - remove file or directory\n");
-            kprint("edit <filename> - edit file\n");
-            kprint("reboot - reboot the system\n");
-            kprint("shutdown - shut down the system\n");
-            kprint("sleep [milliseconds] - sleep for a specified amount of time\n");
-            kprint("echo [message] - print a message\n");
-            kprint("fcsasm <src.asm> <dst.ex> - compile assembly to executable\n");
+            kprint("    help - show this help\n");
+            kprint("    clear - clear screen\n");
+            kprint("    disk [n] - select disk (0-3)\n");
+            kprint("    read (-l length) [lba] - read sector\n");
+            kprint("    write [lba] [-h |-t] [data] - write data\n");
+            kprint("    bootsec - create boot sector\n");
+            kprint("    list - list available disks\n");
+            kprint("    fatmount - mount FAT32 partition\n");
+            kprint("    ls - list files in FAT32 root directory\n");
+            kprint("    cat - display file content\n");
+            kprint("    fatmkfs - create FAT32 filesystem\n");
+            kprint("    fatinfo - display FAT32 volume label and filesystem type\n");
+            kprint("    touch - create empty file\n");
+            kprint("    mkdir - create directory\n");
+            kprint("    rm - remove file or directory\n");
+            kprint("    edit <filename> - edit file\n");
+            kprint("    reboot - reboot the system\n");
+            kprint("    shutdown - shut down the system\n");
+            kprint("    sleep [milliseconds] - sleep for a specified amount of time\n");
+            kprint("    echo [message] - print a message\n");
+            kprint("    fcsasm <src.asm> <dst.ex> - compile assembly to executable\n");
+            kprint("    fcsasm -l <src.asm> - list labels\n");
             return;
         }
         else if (strcmp(arg[0], "clear") == 0)
@@ -367,51 +369,102 @@ void shell_execute(char *input)
         } 
         else if (strcmp(arg[0], "ls") == 0)
         {
-            //kprintf("\n");
             fat32_dir_entry_t entries[32];
             int n = fat32_read_dir(current_disk, current_dir_cluster, entries, 32);
             if (n < 0) {
-                kprint("Error read directory\n");
+                kprint("Error reading directory\n");
                 return;
             }
+            
+            // Сначала выводим директории
             for (int i = 0; i < n; i++) {
-                if (entries[i].name[0] == 0xE5) continue;
+                if (entries[i].name[0] == 0xE5 || entries[i].name[0] == 0) continue;
+                char c = entries[i].name[0];
+                if (!((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_')) continue;
+                if ((entries[i].attr & 0x0F) == 0x08) continue; // Пропускаем volume label
+                
+                if ((entries[i].attr & 0x10) == 0x10) { // Это директория
+                    char name[13] = {0};
+                    int pos = 0;
+                    
+                    // Имя (8 символов)
+                    for (int j = 0; j < 8; j++) {
+                        if (entries[i].name[j] != ' ') {
+                            name[pos++] = entries[i].name[j];
+                        }
+                    }
+                    
+                    // Расширение (3 символа)
+                    int has_ext = 0;
+                    for (int j = 8; j < 11; j++) {
+                        if (entries[i].name[j] != ' ') has_ext = 1;
+                    }
+                    
+                    if (has_ext) {
+                        name[pos++] = '.';
+                        for (int j = 8; j < 11; j++) {
+                            if (entries[i].name[j] != ' ') {
+                                name[pos++] = entries[i].name[j];
+                            }
+                        }
+                    }
+                    name[pos] = 0;
+                    if (name[0] == 0) continue; // не выводим пустые имена
+                    
+                    // Считаем количество записей в директории
+                    fat32_dir_entry_t subentries[32];
+                    int subn = fat32_read_dir(current_disk, 
+                        ((uint32_t)entries[i].first_cluster_high << 16) | entries[i].first_cluster_low, 
+                        subentries, 32);
+                    if (subn < 0) subn = 0;
+                    
+                    kprintf(" <DIR>  %s (%d entries)\n", name, subn);
+                            }
+                        }
+            
+            // Затем выводим файлы
+            for (int i = 0; i < n; i++) {
+                if (entries[i].name[0] == 0xE5 || entries[i].name[0] == 0) continue;
+                char c = entries[i].name[0];
+                if (!((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_')) continue;
+                if ((entries[i].attr & 0x0F) == 0x08) continue; // Пропускаем volume label
+                
+                if ((entries[i].attr & 0x10) != 0x10) { // Это файл
                 char name[13] = {0};
                 int pos = 0;
-                // Name (8 characters)
+                    
+                // Имя (8 символов)
                 for (int j = 0; j < 8; j++) {
-                    if (entries[i].name[j] != ' ' && entries[i].name[j] != 0 && entries[i].name[j] != (char)0xE5)
+                        if (entries[i].name[j] != ' ') {
                         name[pos++] = entries[i].name[j];
                 }
-                // Extension (3 characters)
+                    }
+                    
+                // Расширение (3 символа)
                 int has_ext = 0;
                 for (int j = 8; j < 11; j++) {
-                    if (entries[i].name[j] != ' ' && entries[i].name[j] != 0 && entries[i].name[j] != (char)0xE5) has_ext = 1;
+                        if (entries[i].name[j] != ' ') has_ext = 1;
                 }
+                    
                 if (has_ext) {
                     name[pos++] = '.';
                     for (int j = 8; j < 11; j++) {
-                        if (entries[i].name[j] != ' ' && entries[i].name[j] != 0 && entries[i].name[j] != (char)0xE5) name[pos++] = entries[i].name[j];
+                            if (entries[i].name[j] != ' ') {
+                                name[pos++] = entries[i].name[j];
+                            }
                     }
                 }
                 name[pos] = 0;
-                if ((unsigned char)name[0] == 0xE5 || name[0] == 0) continue; // don't output if E5 or empty
-                // Пропускаем volume label
-                if ((entries[i].attr & 0x0F) == 0x08) continue;
-                if ((entries[i].attr & 0x10) == 0x10) {
-                    // Директория: считаем количество записей
-                    fat32_dir_entry_t subentries[32];
-                    int subn = fat32_read_dir(current_disk, ((uint32_t)entries[i].first_cluster_high << 16) | entries[i].first_cluster_low, subentries, 32);
-                    if (subn < 0) subn = 0;
-                    kprintf(" <DIR>  %s (%d entries)\n", name, subn);
-                } else {
+                    if (name[0] == 0) continue; // не выводим пустые имена
+                    
+                    // Выводим размер файла
                     uint32_t size = entries[i].file_size;
-                    if (size < 1024*1024) {
+                    if (size < 1024) {
                         kprintf(" <FILE> %s (%u bytes)\n", name, size);
-                    } else {
-                        uint32_t mb = size / (1024*1024);
-                        uint32_t kb = (size % (1024*1024)) / 1024;
-                        kprintf(" <FILE> %s (%u.%u MB)\n", name, mb, kb/100);
+                    } else if (size < 1024*1024) {
+                        kprintf(" <FILE> %s (%u.%u KB)\n", name, size/1024, (size%1024)/100);
+                } else {
+                        kprintf(" <FILE> %s (%u.%u MB)\n", name, size/(1024*1024), (size%(1024*1024))/100000);
                     }
                 }
             }
@@ -442,7 +495,7 @@ void shell_execute(char *input)
             } else {
                 for (int i = 0; i < dot && i < 8; i++) fatname[i] = toupper(filename[i]);
                 for (int i = dot + 1, j = 8; i < clen && j < 11; i++, j++) fatname[j] = toupper(filename[i]);
-            }
+                }
             for (int i = 0; i < n; i++) {
                 if (strncmp(entries[i].name, fatname, 11) == 0) {
                     uint32_t cluster = ((uint32_t)entries[i].first_cluster_high << 16) | entries[i].first_cluster_low;
@@ -916,6 +969,33 @@ void shell_execute(char *input)
         }
         else
         {
+            // Попытка запустить любой файл как бинарный
+            fat32_dir_entry_t entries[32];
+            int n = fat32_read_dir(current_disk, current_dir_cluster, entries, 32);
+            char fatname[12];
+            memset(fatname, ' ', 11);
+            fatname[11] = 0;
+            int clen = strlen(arg[0]);
+            int dot = -1;
+            for (int i = 0; i < clen; i++) if (arg[0][i] == '.') { dot = i; break; }
+            if (dot == -1) {
+                for (int i = 0; i < clen && i < 8; i++) fatname[i] = toupper(arg[0][i]);
+            } else {
+                for (int i = 0; i < dot && i < 8; i++) fatname[i] = toupper(arg[0][i]);
+                for (int i = dot + 1, j = 8; i < clen && j < 11; i++, j++) fatname[j] = toupper(arg[0][i]);
+            }
+            int found = 0;
+            for (int i = 0; i < n; i++) {
+                if (strncmp(entries[i].name, fatname, 11) == 0 && (entries[i].attr & 0x10) == 0) {
+                    found = 1;
+                    break;
+                }
+            }
+            if (found) {
+                load_and_run_binary(arg[0], current_disk, current_dir_cluster);
+                return;
+            }
+
             if (startsWith(arg[0], "#"));
             else
             {
