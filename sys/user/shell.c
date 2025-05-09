@@ -4,6 +4,7 @@
 #include <ata.h>
 #include <fat32.h>
 #include "edit.c"
+#include <fcsasm.h>
 
 int current_disk = 0;
 uint8_t * ide_buf; // Buffer for read/write operations
@@ -146,6 +147,7 @@ void shell_execute(char *input)
             kprint("shutdown - shut down the system\n");
             kprint("sleep [milliseconds] - sleep for a specified amount of time\n");
             kprint("echo [message] - print a message\n");
+            kprint("fcsasm <src.asm> <dst.ex> - compile assembly to executable\n");
             return;
         }
         else if (strcmp(arg[0], "clear") == 0)
@@ -365,7 +367,7 @@ void shell_execute(char *input)
         } 
         else if (strcmp(arg[0], "ls") == 0)
         {
-            kprintf("\n");
+            //kprintf("\n");
             fat32_dir_entry_t entries[32];
             int n = fat32_read_dir(current_disk, current_dir_cluster, entries, 32);
             if (n < 0) {
@@ -902,6 +904,15 @@ void shell_execute(char *input)
             kprint("Press any key to continue...\n");
             kgetch();
             return;
+        }
+        else if (strcmp(arg[0], "fcsasm") == 0) {
+            if (count < 3) {
+                kprintf("Usage: fcsasm <src.asm> <dst.ex>\n");
+            } else {
+                kprintf("FCSASM v0.0.4\n\n");
+                fcsasm_compile(arg[1], arg[2]);
+                kprint("\n");
+            }
         }
         else
         {

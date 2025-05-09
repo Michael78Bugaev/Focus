@@ -787,3 +787,22 @@ int ksnprintf(char* str, size_t size, const char* format, ...) {
     va_end(args);
     return written;
 }
+
+int isspace(char c) {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
+}
+
+char* strstr(const char* haystack, const char* needle) {
+    if (!*needle) return (char*)haystack; // Пустая строка — всегда совпадение
+
+    for (; *haystack; haystack++) {
+        const char *h = haystack;
+        const char *n = needle;
+        while (*h && *n && *h == *n) {
+            h++;
+            n++;
+        }
+        if (!*n) return (char*)haystack; // Нашли совпадение
+    }
+    return NULL; // Не найдено
+}

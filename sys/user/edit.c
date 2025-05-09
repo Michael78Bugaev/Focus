@@ -1,16 +1,23 @@
 #include <stdint.h>
+#ifndef VGA_MEM
+#define VGA_MEM    ((uint16_t*)0xB8000)
+#endif
+#ifndef VGA_WIDTH
+#define VGA_WIDTH  80
+#endif
 #include <vga.h>
 #include <fat32.h>
 #include <string.h>
 #include <stdarg.h>
+#include <vga_draw.h>
 
 #define EDITOR_ROWS 22
-#define EDITOR_COLS 78
+#define EDITOR_COLS 79
 #define EDITOR_START_ROW 1
 #define EDITOR_START_COL 0
 #define MAX_FILE_SIZE 4096
 #define MAX_LINE_LENGTH 256
-#define MAX_LINES 1000
+#define MAX_LINES 100000
 
 static int horizontal_offset = 0; // ?????????????? ?????????
 static int scroll_offset = 0;  // ???????????? ?????????
@@ -27,7 +34,7 @@ typedef struct {
     int length;
 } Line;
 
-// Глобальные переменные редактора
+// --- ?????????? ?????????? ---
 static Line lines[MAX_LINES];
 static int num_lines = 0;
 static int cursor_x = 0;
@@ -49,6 +56,43 @@ void save_vga_cursor() {
 void restore_vga_cursor() {
     set_cursor_x(EDITOR_START_COL + cursor_x);
     set_cursor_y(EDITOR_START_ROW + cursor_y);
+}
+
+static uint16_t screen_start;
+static int screen_width;
+static int screen_height;
+
+static void move_cursor(int dx, int dy) {
+    cursor_x += dx;
+    cursor_y += dy;
+    if (cursor_x < 0) cursor_x = 0;
+    if (cursor_y < 0) cursor_y = 0;
+    if (cursor_y >= num_lines) cursor_y = num_lines - 1;
+    if (cursor_x > lines[cursor_y].length) cursor_x = lines[cursor_y].length;
+    if (cursor_x >= screen_width) cursor_x = screen_width - 1;
+}
+
+static void draw_line(int line_num, const char* line) {
+    uint16_t pos = screen_start + line_num * screen_width;
+    int i;
+    for (i = 0; line[i] && i < screen_width; i++) {
+        write(line[i], WHITE_ON_BLACK, pos + i);
+    }
+    for (; i < screen_width; i++) {
+        write(' ', WHITE_ON_BLACK, pos + i);
+    }
+}
+
+static void draw_buffer() {
+    uint16_t old_cursor = get_cursor();
+    for (int i = 0; i < screen_height; i++) {
+        if (i < num_lines) {
+            draw_line(i, lines[i].text);
+        } else {
+            draw_line(i, "");
+        }
+    }
+    set_cursor(old_cursor);
 }
 
 // Функции для работы с текстом
@@ -88,15 +132,23 @@ void delete_char(int x, int y) {
     modified = 1;
 }
 
-void split_line(int x, int y) {
-    if (y >= num_lines || num_lines >= MAX_LINES - 1) return;
-    
-    // Сдвигаем все строки вниз
+int split_line(int x, int y) {
+    if (y < 0 || y >= num_lines || num_lines >= MAX_LINES) return 0;
+    if (x == 0) {
+        // ???????? ?????? ?????? ????? ???????
+        for (int i = num_lines; i > y; i--) {
+            lines[i] = lines[i-1];
+        }
+        lines[y].length = 0;
+        lines[y].text[0] = 0;
+        num_lines++;
+        modified = 1;
+        return 1;
+    }
+    // ??????????? ?????????? ??????
     for (int i = num_lines; i > y + 1; i--) {
         lines[i] = lines[i-1];
     }
-    
-    // Копируем оставшийся текст в новую строку
     int new_line_len = lines[y].length - x;
     if (new_line_len > 0) {
         strncpy(lines[y+1].text, &lines[y].text[x], new_line_len);
@@ -106,30 +158,36 @@ void split_line(int x, int y) {
         lines[y+1].length = 0;
         lines[y+1].text[0] = 0;
     }
-    
-    // Обрезаем текущую строку
     lines[y].length = x;
     lines[y].text[x] = 0;
-    
     num_lines++;
     modified = 1;
+    return 1;
 }
 
 // Функции отображения
 void draw_menu() {
-    set_cursor_x(0); set_cursor_y(0);
-    for (int i = 0; i < MAX_COLS; i++) kputchar(' ', 0x70); // Очистить всю строку меню цветом панели
+    // ???????? ??????? ?????? ?????? ????
+    api_draw_rectangle(EDITOR_COLS, 1, 0, 0, MENU_BG);
     set_cursor_x(0); set_cursor_y(0);
     kprintf("<(70)> File   Edit   Help");
-    for (int i = 20; i < MAX_COLS; i++) kprintf("<(70)> ");
+    // ??????? ??????? ??????? ??????
+    char posbuf[32];
+    ksnprintf(posbuf, sizeof(posbuf), "POSX: %d       POSY:%d", cursor_x + 1, cursor_y + 1);
+    int pos_col = EDITOR_COLS - 1 - (int)strlen(posbuf);
+    if (pos_col < 20) pos_col = 20; // ????? ?? ??????? ?? ????
+    set_cursor_x(pos_col);
+    set_cursor_y(0);
+    kprintf("<(70)>%s", posbuf);
 }
 
 void draw_status(const char* msg) {
+    // ???????? ?????? ?????? ?????? ????
+    api_draw_rectangle(EDITOR_COLS, 1, 0, MAX_ROWS-1, MENU_BG);
     set_cursor_x(0); set_cursor_y(MAX_ROWS-1);
     char status[80];
     ksnprintf(status, sizeof(status), "%s %s", filename, modified ? "[Modified]" : "");
     kprintf("<(70)> %s", status);
-    for (int i = strlen(status)+1; i < MAX_COLS; i++) kprintf("<(70)> ");
 }
 
 void ensure_cursor_visible() {
@@ -151,19 +209,21 @@ void ensure_cursor_visible() {
 
 // Обновляем только измененную строку
 void update_line(int row) {
-    set_cursor_x(EDITOR_START_COL);
-    set_cursor_y(EDITOR_START_ROW + row);
     int line_idx = row + scroll_offset;
     if (line_idx < num_lines) {
-        for (int col = 0; col < EDITOR_COLS; col++) {
-            int real_col = col + horizontal_offset;
-            char c = (real_col < lines[line_idx].length) ? lines[line_idx].text[real_col] : ' ';
-            kputchar(c, GRAY_ON_BLACK);
+        // ??????? ????? ?????? ???????? ? VGA
+        api_draw_text(EDITOR_START_COL, EDITOR_START_ROW + row, lines[line_idx].text, GRAY_ON_BLACK);
+        // ???? ?????? ?????? EDITOR_COLS ? ???????? ??????? ?????????
+        int len = lines[line_idx].length;
+        if (len < EDITOR_COLS) {
+            // ???????? ??????? ?????? ?????????
+            for (int i = len; i < EDITOR_COLS; i++) {
+                api_draw_text(EDITOR_START_COL + i, EDITOR_START_ROW + row, " ", GRAY_ON_BLACK);
+            }
         }
     } else {
-        for (int col = 0; col < EDITOR_COLS; col++) {
-            kputchar(' ', GRAY_ON_BLACK);
-        }
+        // ?????? ?????? ? ???????? ??? ?????? ?????????
+        api_draw_rectangle(EDITOR_COLS, 1, EDITOR_START_COL, EDITOR_START_ROW + row, GRAY_ON_BLACK);
     }
 }
 
@@ -171,12 +231,27 @@ void update_screen() {
     for (int row = 0; row < EDITOR_ROWS; row++) {
         update_line(row);
     }
+    // ?????????? ?????????? ?????? ?????? ????? ???? ?????????
+    update_cursor();
 }
 
 // Обновляем только курсор
 void update_cursor() {
     set_cursor_x(EDITOR_START_COL + cursor_x - horizontal_offset);
     set_cursor_y(EDITOR_START_ROW + cursor_y - scroll_offset);
+}
+
+// ??????? ??? ?????????? ?????? POSX ? POSY ? ??????? ??????
+void update_cursor_pos_panel() {
+    char posbuf[32];
+    ksnprintf(posbuf, sizeof(posbuf), "POSX: %d       POSY:%d", cursor_x + 1, cursor_y + 1);
+    int pos_col = EDITOR_COLS - 1 - (int)strlen(posbuf);
+    if (pos_col < 20) pos_col = 20;
+    // ?????? ?????? ? VGA ??? ??????????? ??????????? ???????
+    int vga_offset = 0 + pos_col; // ?????? 0, ??????? pos_col
+    for (int i = 0; posbuf[i] && (pos_col + i) < VGA_WIDTH; i++) {
+        VGA_MEM[vga_offset + i] = (MENU_BG << 8) | posbuf[i];
+    }
 }
 
 // --- Окно ошибки ---
@@ -221,8 +296,16 @@ int show_error_box(const char* message, int allow_cancel) {
         }
         int ch = kgetch();
         if (allow_cancel && (ch == 0x83 || ch == 9)) selected = 1 - selected; // Tab или Right/Left
-        if (ch == 13) return selected; // Enter: 0=Ok, 1=Cancel
-        if (ch == 27) return 1; // ESC = Cancel
+        if (ch == 13) {
+            draw_menu();
+            update_screen();
+            return selected; // Enter: 0=Ok, 1=Cancel
+        }
+        if (ch == 27) {
+            draw_menu();
+            update_screen();
+            return 1; // ESC = Cancel
+        }
     }
 }
 
@@ -299,6 +382,8 @@ void info_window(const char* fmt, ...) {
             if (ch == 13 || ch == 27) break;
         }
     }
+    draw_menu();
+    update_screen();
 }
 
 // --- ???? ????? ?????? (??????????? ??????????????) ---
@@ -351,9 +436,13 @@ int input_window(char* out, int maxlen, const char* prompt) {
         int ch = kgetch();
         if (ch == 13) { // Enter
             out[pos] = 0;
+            draw_menu();
+            update_screen();
             return 1;
         } else if (ch == 27) { // Esc
             out[0] = 0;
+            draw_menu();
+            update_screen();
             return 0;
         } else if (ch == 8) { // Backspace
             if (pos > 0) pos--;
@@ -365,9 +454,16 @@ int input_window(char* out, int maxlen, const char* prompt) {
     }
 }
 
+// ??????? ????????????? ?????? ?????????
+void editor_screen_init(const char* status_msg) {
+    draw_menu();
+    update_screen();
+    draw_status(status_msg);
+    update_cursor();
+}
+
 // Функции работы с файлами
 void load_file(const char* fname) {
-    // Преобразуем имя в 8.3 формат FAT
     char fatname[12];
     memset(fatname, ' ', 11);
     fatname[11] = 0;
@@ -380,7 +476,6 @@ void load_file(const char* fname) {
         for (int i = 0; i < dot && i < 8; i++) fatname[i] = toupper(fname[i]);
         for (int i = dot + 1, j = 8; i < clen && j < 11; i++, j++) fatname[j] = toupper(fname[i]);
     }
-    kprintf("LOAD: fname = '%s' (fatname = '%.11s')\n", fname, fatname);
     fat32_dir_entry_t entries[32];
     int n = fat32_read_dir(0, current_dir_cluster, entries, 32);
     int found = 0;
@@ -402,27 +497,51 @@ void load_file(const char* fname) {
         if (size > 0) {
             buffer[size] = 0;
             num_lines = 0;
-            char* line = strtok(buffer, "\n");
-            while (line && num_lines < MAX_LINES) {
-                strncpy(lines[num_lines].text, line, MAX_LINE_LENGTH-1);
-                lines[num_lines].length = strlen(line);
-                lines[num_lines].text[lines[num_lines].length] = 0;
-                num_lines++;
-                line = strtok(NULL, "\n");
+            int i = 0, line_start = 0;
+            while (i <= size && num_lines < MAX_LINES) {
+                if (buffer[i] == '\n' || buffer[i] == 0) {
+                    int len = i - line_start;
+                    if (len > MAX_LINE_LENGTH-1) len = MAX_LINE_LENGTH-1;
+                    if (len > 0) {
+                        strncpy(lines[num_lines].text, &buffer[line_start], len);
+                        lines[num_lines].text[len] = 0;
+                        lines[num_lines].length = len;
+                    } else {
+                        lines[num_lines].text[0] = 0;
+                        lines[num_lines].length = 0;
+                    }
+                    num_lines++;
+                    line_start = i + 1;
+                }
+                i++;
+            }
+            // ???? ????????? ?????? ?? ??????, ????????? ?????? ??????
+            if (num_lines < MAX_LINES && num_lines > 0 && lines[num_lines-1].length != 0) {
+                lines[num_lines].length = 0;
+                lines[num_lines].text[0] = 0;
+                //num_lines++;
+            }
+            // ???? ???? ??????, ????????? ???? ?????? ??????
+            if (num_lines == 0) {
+                lines[0].length = 0;
+                lines[0].text[0] = 0;
+                num_lines = 1;
             }
             modified = 0;
-            info_window("File loaded");
+            editor_screen_init("File loaded");
+            return;
         }
     } else {
+        // ????? ????
         num_lines = 1;
         lines[0].length = 0;
         lines[0].text[0] = 0;
         modified = 0;
-        draw_status("New file");
+        editor_screen_init("New file");
+        cursor_x = 0;
+        cursor_y = 0;
+        scroll_offset = 0;
     }
-    cursor_x = 0;
-    cursor_y = 0;
-    scroll_offset = 0;
 }
 
 void save_file(const char* fname) {
@@ -439,7 +558,12 @@ void save_file(const char* fname) {
     }
     char buffer[MAX_FILE_SIZE];
     int pos = 0;
-    for (int i = 0; i < num_lines; i++) {
+    // ????? ????????? ???????? ?????? ??????
+    int last_nonempty = num_lines - 1;
+    while (last_nonempty > 0 && lines[last_nonempty].length == 0) {
+        last_nonempty--;
+    }
+    for (int i = 0; i <= last_nonempty; i++) {
         if (pos + lines[i].length + 1 >= MAX_FILE_SIZE) break;
         strncpy(buffer + pos, lines[i].text, lines[i].length);
         pos += lines[i].length;
@@ -457,13 +581,8 @@ void save_file(const char* fname) {
 
 // Нарисовать прямоугольник меню
 void draw_menu_box(int menu_row, int menu_col, int menu_width, int menu_height) {
-    for (int r = 0; r < menu_height; r++) {
-        set_cursor_x(menu_col);
-        set_cursor_y(menu_row + r);
-        for (int c = 0; c < menu_width; c++) {
-            kputchar(' ', MENU_BG);
-        }
-    }
+    // ???????? ??????? ???? ??????
+    api_draw_rectangle(menu_width, menu_height, menu_col, menu_row, MENU_BG);
 }
 
 void draw_menu_bar_highlighted() {
@@ -494,14 +613,13 @@ void draw_file_menu(int sel, const char** items, int n_items, int menu_row, int 
         }
         for (int j = 0; buf[j]; j++) kputchar(buf[j], color);
     }
-    // update_cursor();
 }
 
 int show_file_menu() {
     const char* items[] = {"Save", "Exit", "About"};
     const int n_items = 3;
     int selected = 0;
-    int menu_row = 1, menu_col = 0; // File начинается с 0
+    int menu_row = 1, menu_col = 0;
     int menu_width = 12;
 
     draw_menu_bar_highlighted();
@@ -524,69 +642,51 @@ int show_file_menu() {
             draw_file_menu(selected, items, n_items, menu_row, menu_col, menu_width);
             restore_vga_cursor();
         } else if (ch == 13) { // Enter
+            // ????? ?????? ?? ???? ???????? ??????? ???? ??????
+            clear_menu_box(menu_row, menu_col, menu_width, n_items);
             return selected + 1;
         } else if (ch == 27) {
+            clear_menu_box(menu_row, menu_col, menu_width, n_items);
             return 0;
         }
     }
 }
 
 void clear_menu_box(int menu_row, int menu_col, int menu_width, int menu_height) {
-    for (int r = 0; r < menu_height; r++) {
-        set_cursor_x(menu_col);
-        set_cursor_y(menu_row + r);
-        for (int c = 0; c < menu_width; c++) {
-            kputchar(' ', MENU_BG);
-        }
-    }
+    // ?????? ???????? ??????? ?????? ????
+    api_draw_rectangle(menu_width, menu_height, menu_col, menu_row, MENU_BG);
 }
 
-// Основная функция редактора
+// ???????????? ???????????? ??????? ??? ????????????? ???????????? ???????
 void editor_main(const char* fname) {
     kclear();
     strncpy(filename, fname, sizeof(filename)-1);
-    draw_menu();
     load_file(fname);
-    
-    // Начальная отрисовка текста
-    // Сохраняем позицию курсора VGA
-    save_vga_cursor();
-    for (int row = 0; row < EDITOR_ROWS; row++) {
-        update_line(row);
-    }
-    // Восстанавливаем позицию курсора VGA
-    restore_vga_cursor();
-    update_cursor();
-    info_window("Welcome to FOCUS Text Editor!");
-    
     int running = 1;
+    bool esc = false;
     while (running) {
         int ch = kgetch();
-        int old_cursor_y = cursor_y;
+        
+        // ????? ??????????? ??????? ????????? ? clamp cursor_y
+        if (cursor_y > num_lines - 1) cursor_y = num_lines - 1;
+        if (cursor_y < 0) cursor_y = 0;
+        // ???? ?????? ???????? ?? ?????????????? ?????? ? ??????? ????? ?????? ??????
+        if (cursor_y == num_lines && num_lines < MAX_LINES) {
+            lines[num_lines].length = 0;
+            lines[num_lines].text[0] = 0;
+            num_lines++;
+        }
         
         switch(ch) {
             case 27: { // ESC
                 int menu_action = show_file_menu();
-                draw_menu(); // Вернуть обычную панель
-                // Очистить прямоугольник меню и перерисовать строки редактора
-                int menu_row = 1, menu_col = 0, menu_width = 12, menu_height = 5;
-                clear_menu_box(menu_row, menu_col, menu_width, menu_height);
-                for (int row = 0; row < menu_height; row++) update_line(row);
-                update_cursor();
+                draw_menu();
                 if (menu_action == 1) save_file(filename);
-                else if (menu_action == 2) { running = 0; kclear(); }
+                else if (menu_action == 2) { running = 0; kclear(); esc = true;}
                 else if (menu_action == 3) {
                     info_window("FOCUS Text Editor v0.3\n   Created by Michael Bugaev");
-                    save_vga_cursor();
-                    for (int row = 0; row < EDITOR_ROWS; row++) update_line(row);
-                    restore_vga_cursor();
-                    update_cursor();
+                    update_screen();
                 }
-                // После закрытия окна перерисовать строки
-                save_vga_cursor();
-                for (int row = 0; row < EDITOR_ROWS; row++) update_line(row);
-                restore_vga_cursor();
-                update_cursor();
                 break;
             }
                 
@@ -605,16 +705,13 @@ void editor_main(const char* fname) {
                     update_screen();
                 } else if (cursor_y > 0) {
                     cursor_x = lines[cursor_y-1].length;
-                    // Объединяем строки
                     strcat(lines[cursor_y-1].text, lines[cursor_y].text);
                     lines[cursor_y-1].length = strlen(lines[cursor_y-1].text);
-                    // Сдвигаем все строки вверх
                     for (int i = cursor_y; i < num_lines-1; i++) {
                         lines[i] = lines[i+1];
                     }
                     num_lines--;
                     cursor_y--;
-                    // Обновляем все строки от курсора до конца
                     for (int i = cursor_y; i < EDITOR_ROWS; i++) {
                         update_line(i);
                     }
@@ -622,13 +719,29 @@ void editor_main(const char* fname) {
                 break;
                 
             case 13: // Enter
-                split_line(cursor_x, cursor_y);
-                cursor_x = 0;
-                cursor_y++;
-                // Обновляем все строки от курсора до конца
-                for (int i = cursor_y-1; i < EDITOR_ROWS; i++) {
+                if (cursor_y == num_lines - 1) {
+                    // ???????? ????? ?????? ?????? ? ?????
+                    if (num_lines < MAX_LINES) {
+                        lines[num_lines].length = 0;
+                        lines[num_lines].text[0] = 0;
+                        num_lines++;
+                        cursor_y = num_lines - 1;
+                        cursor_x = 0;
+                    }
+                } else {
+                    int did_split = split_line(cursor_x, cursor_y);
+                    if (did_split) {
+                        cursor_y++;
+                        cursor_x = 0;
+                    }
+                }
+                int start = cursor_y > 0 ? cursor_y - 1 : 0;
+                for (int i = start; i < EDITOR_ROWS; i++) {
                     update_line(i);
                 }
+                ensure_cursor_visible();
+                update_screen();
+                update_cursor();
                 break;
                 
             case 0x80: // Up Arrow
@@ -679,61 +792,14 @@ void editor_main(const char* fname) {
                 }
                 break;
                 
-            case 0x84: // Home
-                cursor_x = 0;
-                break;
-                
-            case 0x85: // End
-                cursor_x = lines[cursor_y].length;
-                break;
-                
-            case 0x86: // Page Up
-                cursor_y = (cursor_y > EDITOR_ROWS) ? cursor_y - EDITOR_ROWS : 0;
-                if (cursor_x > lines[cursor_y].length) {
-                    cursor_x = lines[cursor_y].length;
-                }
-                break;
-                
-            case 0x87: // Page Down
-                cursor_y = (cursor_y + EDITOR_ROWS < num_lines) ? cursor_y + EDITOR_ROWS : num_lines - 1;
-                if (cursor_x > lines[cursor_y].length) {
-                    cursor_x = lines[cursor_y].length;
-                }
-                break;
-                
-            case 0x88: // Delete
-                if (cursor_x < lines[cursor_y].length) {
-                    delete_char(cursor_x, cursor_y);
-                    update_screen();
-                } else if (cursor_y < num_lines - 1) {
-                    // Объединяем текущую строки со следующей
-                    strcat(lines[cursor_y].text, lines[cursor_y+1].text);
-                    lines[cursor_y].length = strlen(lines[cursor_y].text);
-                    // Сдвигаем все строки вверх
-                    for (int i = cursor_y + 1; i < num_lines - 1; i++) {
-                        lines[i] = lines[i+1];
-                    }
-                    num_lines--;
-                    // Обновляем все строки от курсора до конца
-                    for (int i = cursor_y; i < EDITOR_ROWS; i++) {
-                        update_line(i);
-                    }
-                }
-                break;
-                
-            case 4: // Save As...
-                char newname[64] = {0};
-                if (input_window(newname, sizeof(newname), "Enter new file name or path:")) {
-                    save_file(newname);
-                    strncpy(filename, newname, sizeof(filename)-1);
-                }
-                // После закрытия окна перерисовать строки
-                for (int row = 0; row < EDITOR_ROWS; row++) update_line(row);
-                update_cursor();
-                break;
-                
             default:
                 if (ch >= 32 && ch <= 126) {
+                    // ????? ???????? ??????? ? ???? ?????? ?? ?????????????? ??????, ??????? ??????
+                    if (cursor_y == num_lines && num_lines < MAX_LINES) {
+                        lines[num_lines].length = 0;
+                        lines[num_lines].text[0] = 0;
+                        num_lines++;
+                    }
                     insert_char(cursor_x, cursor_y, ch);
                     cursor_x++;
                     ensure_cursor_visible();
@@ -742,23 +808,16 @@ void editor_main(const char* fname) {
                 }
                 break;
         }
-        
-        // Ограничиваем курсор
-        if (cursor_y >= num_lines) cursor_y = num_lines - 1;
+        // ????? ?????? ???????? ? clamp cursor_y
+        if (cursor_y > num_lines - 1) cursor_y = num_lines - 1;
         if (cursor_y < 0) cursor_y = 0;
         if (cursor_x > lines[cursor_y].length) cursor_x = lines[cursor_y].length;
         if (cursor_x < 0) cursor_x = 0;
-        
-        // Обновляем курсор только если его позиция изменилась
-        if (old_cursor_y != cursor_y) {
-            update_cursor();
-        }
+        update_cursor_pos_panel();
     }
-    
+    if (esc) { kclear(); return; }
     kclear();
     draw_menu();
-    save_vga_cursor();
     for (int row = 0; row < EDITOR_ROWS; row++) update_line(row);
-    restore_vga_cursor();
     update_cursor();
 } 
