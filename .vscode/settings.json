@@ -6,6 +6,7 @@
         "vga.h": "c",
         "idt.h": "c",
         "fat16.h": "c",
-        "ports.h": "c"
+        "ports.h": "c",
+        "fcs_vm.h": "c"
     }
 }

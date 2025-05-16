@@ -3,23 +3,21 @@
 #include <vga.h>
 #include <idt.h>
 #include <fat32.h>
-
 /*
  * WARNING:
  * Always open this file at codepage CP437!
 */
 
-
-
 void kentr() {
     init_gdt();
     init_idt();
     init_pit();
-    kprintf("FOCUS Operating System   v1.3\n");
+    kprintf("FOCUS Operating System v1.3\n");
     kprintf("Created by Michael Bugaev\n");
     init_dmem();
-    
+    //paging_init();
     ata_init();
+    atapi_init();
     shell_execute("fatmount");
 
     char *input;

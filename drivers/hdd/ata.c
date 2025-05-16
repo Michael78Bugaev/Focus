@@ -60,6 +60,73 @@ static int ata_init_drive(uint16_t base, uint8_t drive) {
     return 0;
 }
 
+// Функция для чтения идентификационных данных устройства
+static void read_device_info(uint16_t base, char* model) {
+    // Отправляем команду IDENTIFY
+    outb(base + ATA_COMMAND, ATA_CMD_IDENTIFY);
+    ata_wait(base);
+    
+    if (ata_check_error(base)) {
+        strcpy(model, "Unknown");
+        return;
+    }
+    
+    // Читаем ответ
+    uint16_t buffer[256];
+    for (int i = 0; i < 256; i++) {
+        buffer[i] = inw(base + ATA_DATA);
+    }
+    
+    // Копируем имя модели (первые 20 слов)
+    char* name = (char*)&buffer[27];
+    for (int i = 0; i < 20; i++) {
+        model[i*2] = name[i*2+1];
+        model[i*2+1] = name[i*2];
+    }
+    model[40] = '\0';
+    
+    // Удаляем пробелы в конце
+    int len = strlen(model);
+    while (len > 0 && model[len-1] == ' ') {
+        model[len-1] = '\0';
+        len--;
+    }
+}
+
+// Функция для идентификации ATA-устройства и чтения модели
+static int ata_identify_device(uint16_t base, uint8_t drive, char* model) {
+    // Сбросить контроллер
+    outb(base + ATA_DRIVE, 0xA0 | (drive << 4));
+    inb(base + ATA_STATUS);
+    // Ждать BSY=0
+    for (int i = 0; i < 1000; i++) {
+        if (!(inb(base + ATA_STATUS) & 0x80)) break;
+    }
+    // Отправить IDENTIFY
+    outb(base + ATA_COMMAND, 0xEC);
+    // Ждать BSY=0 и DRQ=1
+    uint8_t status = 0;
+    for (int i = 0; i < 1000; i++) {
+        status = inb(base + ATA_STATUS);
+        if (!(status & 0x80) && (status & 0x08)) break;
+    }
+    if (!(status & 0x08)) return -1; // Нет DRQ — нет устройства
+
+    // Прочитать 256 слов
+    uint16_t buffer[256];
+    for (int i = 0; i < 256; i++) buffer[i] = inw(base + ATA_DATA);
+
+    // Копировать модель (40 байт, слова 27-46)
+    for (int i = 0; i < 20; i++) {
+        model[i*2] = buffer[27+i] >> 8;
+        model[i*2+1] = buffer[27+i] & 0xFF;
+    }
+    model[40] = 0;
+    // Удалить пробелы в конце
+    for (int i = 39; i >= 0 && model[i] == ' '; i--) model[i] = 0;
+    return 0;
+}
+
 // Инициализация ATA контроллера
 void ata_init() {
     memset(drives, 0, sizeof(drives));
@@ -67,21 +134,45 @@ void ata_init() {
     // Проверяем primary master
     if (ata_init_drive(ATA_PRIMARY_BASE, 0) == 0) {
         drives[0].present = 1;
+        kprintf("Found ATA primary master: %s\n", drives[0].name);
     }
     
     // Проверяем primary slave
     if (ata_init_drive(ATA_PRIMARY_BASE, 1) == 0) {
         drives[1].present = 1;
+        kprintf("Found ATA primary slave: %s\n", drives[1].name);
     }
     
     // Проверяем secondary master
     if (ata_init_drive(ATA_SECONDARY_BASE, 0) == 0) {
         drives[2].present = 1;
+        kprintf("Found ATA secondary master: %s\n", drives[2].name);
     }
     
     // Проверяем secondary slave
     if (ata_init_drive(ATA_SECONDARY_BASE, 1) == 0) {
         drives[3].present = 1;
+        kprintf("Found ATA secondary slave: %s\n", drives[3].name);
+    }
+
+    // Остальные устройства — только наличие контроллера
+    if (inb(0x1F7) != 0xFF) {
+        kprint("Found IDE controller at 0x1F0\n");
+    }
+    if (inb(0x177) != 0xFF) {
+        kprint("Found SATA controller at 0x170\n");
+    }
+    if (inb(0x337) != 0xFF) {
+        kprint("Found SCSI controller at 0x330\n");
+    }
+    if (inb(0x64) != 0xFF) {
+        kprint("Found USB controller at 0x60\n");
+    }
+    if (inb(0x1F7) != 0xFF) {
+        kprint("Found CD/DVD drive at 0x1F0\n");
+    }
+    if (inb(0x3F7) != 0xFF) {
+        kprint("Found floppy drive at 0x3F0\n");
     }
 }
 

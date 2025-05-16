@@ -119,7 +119,7 @@ int fcsasm_compile(const char* src, const char* dst) {
 
     // --- Читаем содержимое файла ---
     int size = fat32_read_file(0, file_cluster, (uint8_t*)filebuf, MAX_CODE_SIZE-1);
-    kprintf("fcsasm: read %d bytes from %s\n", size, src);
+    //kprintf("fcsasm: read %d bytes from %s\n", size, src);
     if (size <= 0) {
         kprintf("fcsasm: cannot read %s\n", src);
         return -1;
@@ -129,7 +129,7 @@ int fcsasm_compile(const char* src, const char* dst) {
     // --- Парсим и генерируем код ---
     char* line = strtok(filebuf, "\n");
     while (line) {
-        kprintf("fcsasm: line='%s'\n", line);
+        //kprintf("fcsasm: line='%s'\n", line);
         while (*line == ' ' || *line == '\t') line++;
         to_lower(line);
         char arg1[16] = {0}, arg2[16] = {0};
@@ -251,7 +251,7 @@ int fcsasm_compile(const char* src, const char* dst) {
 
     // --- Записываем бинарник ---
     int res = fat32_write_file(0, dst, code, code_size);
-    kprintf("fcsasm: fat32_write_file returned %d\n", res);
+    //kprintf("fcsasm: fat32_write_file returned %d\n", res);
     if (res < 0) {
         kprintf("fcsasm: cannot write %s\n", dst);
         return -3;

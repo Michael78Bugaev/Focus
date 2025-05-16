@@ -6,6 +6,12 @@
 #include "edit.c"
 #include <fcsasm.h>
 #include <fcs_vm.h>
+#include <elf.h>
+#include <iso9660.h>
+
+// Прототипы функций
+static int isocpy_file(const char* src, const char* dst);
+static int isocpy_dir(const char* src, const char* dst);
 
 int current_disk = 0;
 uint8_t * ide_buf; // Buffer for read/write operations
@@ -150,6 +156,11 @@ void shell_execute(char *input)
             kprint("    echo [message] - print a message\n");
             kprint("    fcsasm <src.asm> <dst.ex> - compile assembly to executable\n");
             kprint("    fcsasm -l <src.asm> - list labels\n");
+            kprint("    xxd <filename> - display hex dump of a file\n");
+            kprint("    isomount <devnum> - mount ISO9660 volume\n");
+            kprint("    isols - list files in ISO9660 volume\n");
+            kprint("    isocat <filename> - display content of ISO9660 file\n");
+            kprint("    isocpy [-r] <src> <dst> - copy file or directory from ISO9660 to FAT32\n");
             return;
         }
         else if (strcmp(arg[0], "clear") == 0)
@@ -966,6 +977,142 @@ void shell_execute(char *input)
                 fcsasm_compile(arg[1], arg[2]);
                 kprint("\n");
             }
+        } else if (strcmp(arg[0], "xxd") == 0) {
+            if (count < 2) {
+                kprint("Usage: xxd <filename>\n");
+                return;
+            }
+            char *filename = arg[1];
+            fat32_dir_entry_t entries[32];
+            int n = fat32_read_dir(current_disk, current_dir_cluster, entries, 32);
+            if (n < 0) {
+                kprint("Error reading directory\n");
+                return;
+            }
+            char fatname[12];
+            memset(fatname, ' ', 11);
+            fatname[11] = 0;
+            int clen = strlen(filename);
+            int dot = -1;
+            for (int i = 0; i < clen; i++) if (filename[i] == '.') { dot = i; break; }
+            if (dot == -1) {
+                for (int i = 0; i < clen && i < 8; i++) fatname[i] = toupper(filename[i]);
+            } else {
+                for (int i = 0; i < dot && i < 8; i++) fatname[i] = toupper(filename[i]);
+                for (int i = dot + 1, j = 8; i < clen && j < 11; i++, j++) fatname[j] = toupper(filename[i]);
+            }
+            int found = 0;
+            uint32_t cluster = 0;
+            uint32_t size = 0;
+            for (int i = 0; i < n; i++) {
+                if (strncmp(entries[i].name, fatname, 11) == 0) {
+                    cluster = ((uint32_t)entries[i].first_cluster_high << 16) | entries[i].first_cluster_low;
+                    size = entries[i].file_size;
+                    found = 1;
+                    break;
+                }
+            }
+            if (!found) {
+                kprint("File not found\n");
+                return;
+            }
+            uint8_t buffer[16];
+            size_t offset = 0;
+            while (offset < size) {
+                size_t bytes_read = fat32_read_file(current_disk, cluster, buffer, (size - offset > 16) ? 16 : size - offset);
+                if (bytes_read <= 0) break;
+                kprintf("%02x: ", offset);
+                for (size_t i = 0; i < 16; i++) {
+                    if (i < bytes_read) {
+                        kprintf("%02x ", buffer[i]);
+                    } else {
+                        kprint("   ");
+                    }
+                }
+                kprint(" ");
+                for (size_t i = 0; i < bytes_read; i++) {
+                    kputchar((buffer[i] >= 32 && buffer[i] <= 126) ? buffer[i] : '.', 0x07);
+                }
+                kprint("\n");
+                offset += bytes_read;
+            }
+        }
+        else if (strcmp(arg[0], "isomount") == 0) {
+            int devnum = iso9660_atapi_devnum;
+            if (count > 1) devnum = atoi(arg[1]);
+            if (iso9660_mount_dev(devnum) == 0) {
+                kprintf("ISO9660 successfully mounted (ATAPI #%d)\n", devnum);
+            } else {
+                kprint("Error mounting ISO9660\n");
+            }
+            return;
+        } else if (strcmp(arg[0], "isols") == 0) {
+            uint8_t sector[2048];
+            extern uint32_t g_root_dir_lba, g_root_dir_size;
+            if (atapi_read_device(iso9660_atapi_devnum, g_root_dir_lba, 1, sector) != 0) {
+                kprint("Error reading ISO root directory\n");
+                return;
+            }
+            size_t offset = 0;
+            while (offset < ISO9660_SECTOR_SIZE) {
+                uint8_t len = sector[offset];
+                if (len == 0) break;
+                uint8_t name_len = sector[offset+32];
+                char* name = (char*)&sector[offset+33];
+
+                // Пропускаем служебные записи "." и ".."
+                if (!(name_len == 1 && (name[0] == 0 || name[0] == 1))) {
+                    // Обрезаем по символу ';' (версия файла)
+                    int real_len = 0;
+                    for (int j = 0; j < name_len; j++) {
+                        if (name[j] == ';') break;
+                        real_len++;
+                    }
+                    // Копируем имя во временный буфер и добавляем нуль-терминатор
+                    char fname[256];
+                    strncpy(fname, name, real_len);
+                    fname[real_len] = 0;
+                    kprintf("%s\n", fname);
+                }
+
+                // Смещение на padding-байт, если name_len нечётное
+                int entry_len = len;
+                if ((33 + name_len) % 2 != 0) entry_len++;
+
+                offset += len;
+            }
+            return;
+        } else if (strcmp(arg[0], "isocat") == 0) {
+            if (count < 2) {
+                kprint("Usage: isocat <filename>\n");
+                return;
+            }
+            char buf[4096];
+            int sz = iso9660_read(arg[1], buf, sizeof(buf)-1);
+            if (sz < 0) {
+                kprint("Error reading file from ISO\n");
+                return;
+            }
+            buf[sz] = 0;
+            kprint(buf);
+            return;
+        } else if (strcmp(arg[0], "isocpy") == 0) {
+            if (count < 3) {
+                kprint("Usage: isocpy [-r] <src> <dst>\n");
+                return;
+            }
+            int recursive = 0;
+            int src_idx = 1;
+            if (strcmp(arg[1], "-r") == 0) {
+                recursive = 1;
+                src_idx = 2;
+            }
+            if (recursive) {
+                isocpy_dir(arg[src_idx], arg[src_idx+1]);
+            } else {
+                isocpy_file(arg[src_idx], arg[src_idx+1]);
+            }
+            return;
         }
         else
         {
@@ -1063,4 +1210,306 @@ void rm_recursive(uint8_t drive, uint32_t cluster) {
             }
         }
     }
+}
+
+void load_and_run_binary(const char* filename, uint32_t disk, uint32_t dir_cluster) {
+    fat32_dir_entry_t entries[32];
+    int n = fat32_read_dir(disk, dir_cluster, entries, 32);
+    if (n < 0) {
+        kprint("Error reading directory\n");
+        return;
+    }
+
+    char fatname[12];
+    memset(fatname, ' ', 11);
+    fatname[11] = 0;
+    int clen = strlen(filename);
+    int dot = -1;
+    for (int i = 0; i < clen; i++) if (filename[i] == '.') { dot = i; break; }
+    if (dot == -1) {
+        for (int i = 0; i < clen && i < 8; i++) fatname[i] = toupper(filename[i]);
+    } else {
+        for (int i = 0; i < dot && i < 8; i++) fatname[i] = toupper(filename[i]);
+        for (int i = dot + 1, j = 8; i < clen && j < 11; i++, j++) fatname[j] = toupper(filename[i]);
+    }
+
+    int found = 0;
+    uint32_t cluster = 0;
+    uint32_t size = 0;
+    for (int i = 0; i < n; i++) {
+        if (strncmp(entries[i].name, fatname, 11) == 0) {
+            cluster = ((uint32_t)entries[i].first_cluster_high << 16) | entries[i].first_cluster_low;
+            size = entries[i].file_size;
+            found = 1;
+            break;
+        }
+    }
+
+    if (!found) {
+        kprintf("File not found: %s\n", filename);
+        return;
+    }
+
+    // Читаем ELF заголовок
+    elf32_ehdr_t ehdr;
+    if (fat32_read_file(disk, cluster, (uint8_t*)&ehdr, sizeof(elf32_ehdr_t)) != sizeof(elf32_ehdr_t)) {
+        kprint("Error reading ELF header\n");
+        return;
+    }
+
+    // Проверяем магическое число ELF
+    if (ehdr.e_ident[0] != ELFMAG0 || ehdr.e_ident[1] != ELFMAG1 ||
+        ehdr.e_ident[2] != ELFMAG2 || ehdr.e_ident[3] != ELFMAG3) {
+        kprint("Not a valid ELF file\n");
+        return;
+    }
+
+    // Проверяем, что это 32-битный исполняемый файл
+    if (ehdr.e_ident[4] != ELFCLASS32 || ehdr.e_type != ET_EXEC) {
+        kprint("Not a valid 32-bit executable\n");
+        return;
+    }
+
+    // Читаем заголовки программ
+    elf32_phdr_t phdr;
+    for (int i = 0; i < ehdr.e_phnum; i++) {
+        if (fat32_read_file(disk, cluster, (uint8_t*)&phdr, sizeof(elf32_phdr_t)) != sizeof(elf32_phdr_t)) {
+            kprint("Error reading program header\n");
+            return;
+        }
+
+        if (phdr.p_type == PT_LOAD) {
+            // Выделяем память для сегмента
+            void* mem = malloc(phdr.p_memsz);
+            if (!mem) {
+                kprint("Out of memory\n");
+                return;
+            }
+
+            // Читаем содержимое сегмента
+            if (fat32_read_file(disk, cluster, (uint8_t*)mem, phdr.p_filesz) != phdr.p_filesz) {
+                kprint("Error reading segment\n");
+                mfree(mem);
+                return;
+            }
+
+            // Очищаем оставшуюся память (bss секция)
+            if (phdr.p_memsz > phdr.p_filesz) {
+                memset((uint8_t*)mem + phdr.p_filesz, 0, phdr.p_memsz - phdr.p_filesz);
+            }
+        }
+    }
+
+    // Запускаем программу
+    void (*entry_point)(void) = (void (*)(void))ehdr.e_entry;
+    entry_point();
+}
+
+// Вспомогательная функция: создать директории по пути (если не существуют)
+static int ensure_fat32_path(uint8_t disk, const char* path, uint32_t* out_dir_cluster, char* out_filename) {
+    // path: 0:\DIR1\DIR2\file.txt
+    // disk: 0
+    // out_dir_cluster: кластер каталога, где будет файл
+    // out_filename: имя файла (8.3)
+    if (!path || !out_dir_cluster || !out_filename) return -1;
+    const char* p = path;
+    // Пропускаем X:\ или X:/
+    if (p[1] == ':' && (p[2] == '\\' || p[2] == '/')) p += 3;
+    else if (p[0] == '\\' || p[0] == '/') p++;
+    uint32_t cluster = root_dir_first_cluster;
+    char part[13];
+    int partlen = 0;
+    const char* last_sep = p;
+    const char* last = p;
+    // Найти последнюю компоненту (имя файла)
+    for (const char* s = p; *s; s++) {
+        if (*s == '\\' || *s == '/') last_sep = s+1;
+    }
+    // Копируем имя файла
+    strncpy(out_filename, last_sep, 12); out_filename[12] = 0;
+    // Теперь создаём/ищем все промежуточные каталоги
+    const char* s = p;
+    while (s < last_sep && *s) {
+        // Копируем компоненту
+        partlen = 0;
+        while (s < last_sep && *s && *s != '\\' && *s != '/') {
+            if (partlen < 12) part[partlen++] = *s;
+            s++;
+        }
+        part[partlen] = 0;
+        if (partlen > 0) {
+            // Проверяем, есть ли такой каталог
+            fat32_dir_entry_t entries[32];
+            int n = fat32_read_dir(disk, cluster, entries, 32);
+            int found = 0;
+            uint32_t next_cl = 0;
+            for (int i = 0; i < n; i++) {
+                if ((entries[i].attr & 0x10) == 0x10) {
+                    char name[13] = {0};
+                    int pos = 0;
+                    for (int j = 0; j < 8; j++) if (entries[i].name[j] != ' ') name[pos++] = entries[i].name[j];
+                    if (strcmp(name, part) == 0) {
+                        next_cl = ((uint32_t)entries[i].first_cluster_high << 16) | entries[i].first_cluster_low;
+                        found = 1;
+                        break;
+                    }
+                }
+            }
+            if (!found) {
+                // Создаём каталог
+                // (аналог mkdir)
+                uint32_t new_cl = find_free_cluster(disk);
+                if (new_cl == 0) return -2;
+                // Добавить запись в каталог
+                uint8_t sector[512];
+                uint32_t lba = fat32_cluster_to_lba(cluster);
+                if (ata_read_sector(disk, lba, sector) != 0) return -3;
+                for (int off = 0; off < 512; off += 32) {
+                    if (sector[off] == 0x00 || sector[off] == 0xE5) {
+                        memset(&sector[off], ' ', 11);
+                        for (int n = 0; n < partlen && n < 8; n++) sector[off + n] = toupper(part[n]);
+                        sector[off + 11] = 0x10; // attr: directory
+                        *(uint16_t*)(&sector[off + 20]) = (uint16_t)((new_cl >> 16) & 0xFFFF); // high
+                        *(uint16_t*)(&sector[off + 26]) = (uint16_t)(new_cl & 0xFFFF); // low
+                        if (ata_write_sector(disk, lba, sector) != 0) return -4;
+                        break;
+                    }
+                }
+                // Инициализируем новый каталог ('.' и '..')
+                uint8_t newsec[512];
+                memset(newsec, 0, 512);
+                // .
+                memset(&newsec[0], ' ', 11); newsec[0] = '.'; newsec[11] = 0x10;
+                *(uint16_t*)(&newsec[20]) = (uint16_t)((new_cl >> 16) & 0xFFFF);
+                *(uint16_t*)(&newsec[26]) = (uint16_t)(new_cl & 0xFFFF);
+                // ..
+                memset(&newsec[32], ' ', 11); newsec[32] = '.'; newsec[33] = '.'; newsec[43] = 0x10;
+                *(uint16_t*)(&newsec[52]) = (uint16_t)((cluster >> 16) & 0xFFFF);
+                *(uint16_t*)(&newsec[58]) = (uint16_t)(cluster & 0xFFFF);
+                if (ata_write_sector(disk, fat32_cluster_to_lba(new_cl), newsec) != 0) return -5;
+                next_cl = new_cl;
+            }
+            cluster = next_cl;
+        }
+        if (*s == '\\' || *s == '/') s++;
+    }
+    *out_dir_cluster = cluster;
+    return 0;
+}
+
+// Копирование файла из ISO9660 в FAT32 с поддержкой абсолютного пути
+static int isocpy_file(const char* src, const char* dst) {
+    char buf[4096];
+    int sz = iso9660_read(src, buf, sizeof(buf));
+    if (sz < 0) {
+        kprintf("isocpy: cannot read %s from ISO\n", src);
+        return -1;
+    }
+    // Разбираем путь назначения
+    uint32_t dir_cluster = current_dir_cluster;
+    char fatname[13];
+    if (dst[1] == ':' && (dst[2] == '\\' || dst[2] == '/')) {
+        // Абсолютный путь
+        if (ensure_fat32_path(current_disk, dst, &dir_cluster, fatname) != 0) {
+            kprintf("isocpy: error creating path %s\n", dst);
+            return -1;
+        }
+    } else {
+        // Только имя файла
+        strncpy(fatname, dst, 12); fatname[12] = 0;
+    }
+    // Имя файла (8.3)
+    char name[12];
+    memset(name, ' ', 11); name[11] = 0;
+    int clen = strlen(fatname);
+    int dot = -1;
+    for (int i = 0; i < clen; i++) if (fatname[i] == '.') { dot = i; break; }
+    if (dot == -1) {
+        for (int i = 0; i < clen && i < 8; i++) name[i] = toupper(fatname[i]);
+    } else {
+        for (int i = 0; i < dot && i < 8; i++) name[i] = toupper(fatname[i]);
+        for (int i = dot + 1, j = 8; i < clen && j < 11; i++, j++) name[j] = toupper(fatname[i]);
+    }
+    // Найти свободный кластер
+    uint32_t cl = find_free_cluster(current_disk);
+    if (cl == 0) {
+        kprintf("isocpy: no free cluster\n");
+        return -1;
+    }
+    // Записать файл
+    if (fat32_write_file(current_disk, cl, (uint8_t*)buf, sz) != sz) {
+        kprintf("isocpy: error writing to FAT32\n");
+        return -1;
+    }
+    // Добавить запись в каталог
+    uint8_t sector[512];
+    uint32_t lba = fat32_cluster_to_lba(dir_cluster);
+    if (ata_read_sector(current_disk, lba, sector) != 0) {
+        kprintf("isocpy: error reading dir\n");
+        return -1;
+    }
+    for (int off = 0; off < 512; off += 32) {
+        if (sector[off] == 0x00 || sector[off] == 0xE5) {
+            memset(&sector[off], ' ', 11);
+            for (int n = 0; n < 11; n++) sector[off + n] = name[n];
+            sector[off + 11] = 0x20; // attr: archive
+            *(uint16_t*)(&sector[off + 20]) = (uint16_t)((cl >> 16) & 0xFFFF); // high
+            *(uint16_t*)(&sector[off + 26]) = (uint16_t)(cl & 0xFFFF); // low
+            *(uint32_t*)(&sector[off + 28]) = sz;
+            if (ata_write_sector(current_disk, lba, sector) != 0) {
+                kprintf("isocpy: error writing dir\n");
+                return -1;
+            }
+            kprintf("isocpy: copied %s -> %s (%d bytes)\n", src, dst, sz);
+            return 0;
+        }
+    }
+    kprintf("isocpy: no free entry in dir\n");
+    return -1;
+}
+
+// Копирование директории из ISO9660 в FAT32 (рекурсивно)
+static int isocpy_dir(const char* src, const char* dst) {
+    // Создать директорию в FAT32
+    // (аналог mkdir)
+    fat32_dir_entry_t entries[32];
+    int n = fat32_read_dir(current_disk, current_dir_cluster, entries, 32);
+    if (n < 0 || n >= 32) {
+        kprintf("isocpy: directory full or error\n");
+        return -1;
+    }
+    char name[12];
+    memset(name, ' ', 11); name[11] = 0;
+    int clen = strlen(dst);
+    for (int i = 0; i < clen && i < 8; i++) name[i] = toupper(dst[i]);
+    // Найти свободный кластер
+    uint32_t new_cl = find_free_cluster(current_disk);
+    if (new_cl == 0) {
+        kprintf("isocpy: no free cluster for dir\n");
+        return -1;
+    }
+    // Добавить запись в каталог
+    uint8_t sector[512];
+    uint32_t lba = fat32_cluster_to_lba(current_dir_cluster);
+    if (ata_read_sector(current_disk, lba, sector) != 0) {
+        kprintf("isocpy: error reading dir\n");
+        return -1;
+    }
+    for (int off = 0; off < 512; off += 32) {
+        if (sector[off] == 0x00 || sector[off] == 0xE5) {
+            memset(&sector[off], ' ', 11);
+            for (int n = 0; n < 11; n++) sector[off + n] = name[n];
+            sector[off + 11] = 0x10; // attr: directory
+            *(uint16_t*)(&sector[off + 20]) = (uint16_t)((new_cl >> 16) & 0xFFFF); // high
+            *(uint16_t*)(&sector[off + 26]) = (uint16_t)(new_cl & 0xFFFF); // low
+            if (ata_write_sector(current_disk, lba, sector) != 0) {
+                kprintf("isocpy: error writing dir\n");
+                return -1;
+            }
+            break;
+        }
+    }
+    // TODO: рекурсивно копировать содержимое каталога src из ISO9660
+    kprintf("isocpy: directory copy not implemented yet\n");
+    return -1;
 }

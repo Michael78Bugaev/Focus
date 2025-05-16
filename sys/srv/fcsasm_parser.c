@@ -47,7 +47,7 @@ void parse_line(const char* line) {
     char* colon = strchr(p, ':');
     if (colon) {
         *colon = 0;
-        kprintf("LABEL: %s\n", p);
+        //kprintf("LABEL: %s\n", p);
         return;
     }
     // Парсим инструкцию
@@ -55,23 +55,23 @@ void parse_line(const char* line) {
     if (!token) return;
     Opcode op = parse_opcode(token);
     if (op == OP_NOP) {
-        kprintf("NOP/UNKNOWN: %s\n", token);
+        //kprintf("NOP/UNKNOWN: %s\n", token);
         return;
     }
     char* arg1 = strtok(NULL, " ,\t\n");
     char* arg2 = strtok(NULL, " ,\t\n");
-    kprintf("INSTR: %d ", op);
+    //kprintf("INSTR: %d ", op);
     if (arg1) {
         Register r1 = parse_register(arg1);
-        if (r1 != REG_NONE) kprintf("R1=%d ", r1);
-        else kprintf("IMM1=%s ", arg1);
+        if (r1 != REG_NONE);
+        else;
     }
     if (arg2) {
         Register r2 = parse_register(arg2);
-        if (r2 != REG_NONE) kprintf("R2=%d ", r2);
-        else kprintf("IMM2=%s ", arg2);
+        if (r2 != REG_NONE);
+        else;
     }
-    kprintf("\n");
+    //kprintf("\n");
 }
 
 // Главная функция парсера и генератора кода
@@ -88,7 +88,7 @@ static int data_offset = 0;
 static char data_segment[MAX_CODE_SIZE];
 
 int fcsasm_parse_and_generate(const char* src, unsigned char* out, int outsize) {
-    kprintf("DEBUG: fcsasm_parse_and_generate started!\n");
+    //kprintf("DEBUG: fcsasm_parse_and_generate started!\n");
     int codepos = 4; // первые 4 байта — длина кода
     char line[MAX_LINE_LEN];
     int lineno = 0;
@@ -109,7 +109,7 @@ int fcsasm_parse_and_generate(const char* src, unsigned char* out, int outsize) 
         char* s = line;
         while (*s && isspace((char)*s)) s++;
         if (*s == 0) continue;
-        kprintf("DEBUG: analyzing: '%s'\n", s);
+        //kprintf("DEBUG: analyzing: '%s'\n", s);
         // Проверка на строковую константу: NAME equ "..."
         char* equ_ptr = strstr(s, " equ ");
         if (equ_ptr) {
@@ -138,18 +138,18 @@ int fcsasm_parse_and_generate(const char* src, unsigned char* out, int outsize) 
         // Метка (LABEL:)
         char* colon = strchr(s, ':');
         if (colon) {
-            kprintf("DEBUG: label: '%s'\n", s);
+            //kprintf("DEBUG: label: '%s'\n", s);
             continue;
         }
         // Парсим инструкцию
         char* token = strtok(s, " ,\t\n");
         if (!token) {
-            kprintf("DEBUG: token not found\n");
+            //kprintf("DEBUG: token not found\n");
             continue;
         }
         Opcode op = parse_opcode(token);
         if (op == OP_NOP) {
-            kprintf("DEBUG: unknown instruction: '%s'\n", token);
+            //kprintf("DEBUG: unknown instruction: '%s'\n", token);
             continue;
         }
         char* arg1 = strtok(NULL, " ,\t\n");
@@ -175,7 +175,7 @@ int fcsasm_parse_and_generate(const char* src, unsigned char* out, int outsize) 
                 if (r2 == REG_NONE) imm = atoi(arg2);
             }
         }
-        kprintf("DEBUG: op=%d, r1=%d, r2=%d, imm=%d\n", op, r1, r2, imm);
+        //kprintf("DEBUG: op=%d, r1=%d, r2=%d, imm=%d\n", op, r1, r2, imm);
         // Генерация кода: [OP][R1][R2][IMM]
         if (codepos + 6 > outsize) return -1;
         out[codepos++] = (unsigned char)op;

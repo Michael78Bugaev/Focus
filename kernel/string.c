@@ -653,16 +653,12 @@ void memset(void *dest, char val, uint32_t count)
     }
 }
 
-void	memcpy(uint8_t *src, uint8_t *dest, uint32_t bytes)
+void memcpy(uint8_t *src, uint8_t *dest, uint32_t bytes)
 {
-	uint32_t i;
-
-	i = 0;
-	while (i < bytes)
-	{
-		dest[i] = src[i];
-		i++;
-	}
+	int i;
+    for (i = 0; i < bytes; i++) {
+        *(dest + i) = *(src + i);
+    }
 }
 
 int kgetch() {
