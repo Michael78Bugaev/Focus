@@ -6,9 +6,8 @@
 #include "edit.c"
 #include <fcsasm.h>
 #include <fcs_vm.h>
-#include <elf.h>
 #include <iso9660.h>
-
+#include <keyboard.h>
 // Прототипы функций
 static int isocpy_file(const char* src, const char* dst);
 static int isocpy_dir(const char* src, const char* dst);
@@ -21,6 +20,21 @@ uint8_t hex_to_int(char c);
 uint32_t find_free_cluster(uint8_t drive);
 
 extern int build_path(uint32_t cluster, char path[][9], int max_depth);
+
+void start_shell()
+{
+    for (;;) {
+        print_prompt();
+        shell_barrier = strlen(get_fat32_path());
+        strnone(input_shell);
+        while (shell_enter != true)
+        {
+            irq_install_handler(1, &shell_handler);
+        }
+        shell_enter = false;
+        shell_execute(input_shell);
+    }
+}
 
 // Local function to convert character to uppercase
 static char my_toupper(char c) {
@@ -161,6 +175,7 @@ void shell_execute(char *input)
             kprint("    isols - list files in ISO9660 volume\n");
             kprint("    isocat <filename> - display content of ISO9660 file\n");
             kprint("    isocpy [-r] <src> <dst> - copy file or directory from ISO9660 to FAT32\n");
+            kprint("    formatdisk - format the selected disk\n");
             return;
         }
         else if (strcmp(arg[0], "clear") == 0)
@@ -514,6 +529,13 @@ void shell_execute(char *input)
                     uint8_t buf[1024];
                     int read = fat32_read_file(current_disk, cluster, buf, (size > 1024) ? 1024 : size);
                     for (int b = 0; b < read; b++) {
+                        if (kbhit()) {
+                            int key = kgetch();
+                            if (key == 27) {
+                                kprint("~esc pressed\n");
+                                return;
+                            }
+                        }
                         kputchar(buf[b], 0x07);
                     }
                     kprint("\n");
@@ -751,23 +773,13 @@ void shell_execute(char *input)
                     uint8_t newsec[512];
                     memset(newsec, 0, 512);
                     // .
-                    memset(&newsec[0], ' ', 11);
-                    newsec[0] = '.';
-                    newsec[11] = 0x10; // attr: directory
-                    *(uint16_t*)(&newsec[20]) = (uint16_t)((new_cl >> 16) & 0xFFFF); // high
-                    *(uint16_t*)(&newsec[26]) = (uint16_t)(new_cl & 0xFFFF); // low
+                    memset(&newsec[0], ' ', 11); newsec[0] = '.'; newsec[11] = 0x10;
+                    newsec[20] = (uint8_t)((new_cl >> 16) & 0xFF);
+                    newsec[26] = (uint8_t)(new_cl & 0xFF);
                     // ..
-                    memset(&newsec[32], ' ', 11);
-                    newsec[32] = '.'; newsec[33] = '.';
-                    newsec[43] = 0x10; // attr: directory
-                    extern uint32_t current_dir_cluster;
-                    extern uint32_t root_dir_first_cluster;
-                    uint32_t parent_cl = current_dir_cluster;
-                    if (parent_cl == root_dir_first_cluster) {
-                        parent_cl = root_dir_first_cluster;
-                    }
-                    *(uint16_t*)(&newsec[52]) = (uint16_t)((parent_cl >> 16) & 0xFFFF); // high
-                    *(uint16_t*)(&newsec[58]) = (uint16_t)(parent_cl & 0xFFFF); // low
+                    memset(&newsec[32], ' ', 11); newsec[32] = '.'; newsec[33] = '.'; newsec[43] = 0x10;
+                    newsec[52] = (uint8_t)((new_cl >> 16) & 0xFF);
+                    newsec[58] = (uint8_t)(new_cl & 0xFF);
                     if (ata_write_sector(current_disk, fat32_cluster_to_lba(new_cl), newsec) != 0) {
                         kprint("Error initializing new dir\n");
                         return;
@@ -1017,25 +1029,34 @@ void shell_execute(char *input)
                 return;
             }
             uint8_t buffer[16];
-            size_t offset = 0;
+            uint32_t offset = 0;
             while (offset < size) {
-                size_t bytes_read = fat32_read_file(current_disk, cluster, buffer, (size - offset > 16) ? 16 : size - offset);
-                if (bytes_read <= 0) break;
-                kprintf("%02x: ", offset);
-                for (size_t i = 0; i < 16; i++) {
-                    if (i < bytes_read) {
-                        kprintf("%02x ", buffer[i]);
-                    } else {
-                        kprint("   ");
+                if (kbhit()) {
+                    int key = kgetch();
+                    if (key == 27) {
+                        kprint("~esc pressed\n");
+                        return;
                     }
                 }
+                int to_read = (size - offset > 16) ? 16 : (size - offset);
+                int read = fat32_read_file_data(current_disk, filename, buffer, to_read, offset);
+                if (read <= 0) break;
+                kprintf("%04x: ", offset);
+                for (int i = 0; i < 16; i++) {
+                    if (i < read)
+                        kprintf("%02x ", buffer[i]);
+                    else
+                        kprint("   ");
+                }
                 kprint(" ");
-                for (size_t i = 0; i < bytes_read; i++) {
-                    kputchar((buffer[i] >= 32 && buffer[i] <= 126) ? buffer[i] : '.', 0x07);
+                for (int i = 0; i < read; i++) {
+                    char c = buffer[i];
+                    kputchar((c >= 32 && c <= 126) ? c : '.', 0x07);
                 }
                 kprint("\n");
-                offset += bytes_read;
+                offset += read;
             }
+            return;
         }
         else if (strcmp(arg[0], "isomount") == 0) {
             int devnum = iso9660_atapi_devnum;
@@ -1094,7 +1115,16 @@ void shell_execute(char *input)
                 return;
             }
             buf[sz] = 0;
-            kprint(buf);
+            for (int i = 0; i < sz; i++) {
+                if (kbhit()) {
+                    int key = kgetch();
+                    if (key == 27) {
+                        kprint("~esc pressed\n");
+                        return;
+                    }
+                }
+                kputchar(buf[i], 0x07);
+            }
             return;
         } else if (strcmp(arg[0], "isocpy") == 0) {
             if (count < 3) {
@@ -1112,6 +1142,43 @@ void shell_execute(char *input)
             } else {
                 isocpy_file(arg[src_idx], arg[src_idx+1]);
             }
+            return;
+        } else if (strcmp(arg[0], "formatdisk") == 0)
+        {
+            kprint("WARNING: Full format will ERASE ALL DATA on the selected disk! \nContinue? (y/n): ");
+            char ch = kgetch();
+            kputchar(ch, 0x07);
+            kprint("\n");
+            if (ch != 'y' && ch != 'Y') {
+                kprint("Cancelled by user.\n");
+                return;
+            }
+            ata_drive_t* drive = ata_get_drive(current_disk);
+            if (!drive || !drive->present) {
+                kprint("Disk not found!\n");
+                return;
+            }
+            uint32_t total = drive->sectors;
+            uint8_t zero[512];
+            memset(zero, 0, 512);
+            kprintf("Formatting disk %d: %u sectors...\n", current_disk, total);
+            for (uint32_t lba = 0; lba < total; lba++) {
+                if (kbhit()) {
+                    int key = kgetch();
+                    if (key == 27) { // Esc
+                        kprint("~esc pressed\n");
+                        return;
+                    }
+                }
+                if (ata_write_sector(current_disk, lba, zero) != 0) {
+                    kprintf("Write error at sector %u!\n", lba);
+                    return;
+                }
+                if ((lba & 0x3FF) == 0) {
+                    kprintf("\r%u/%u...", lba, total);
+                }
+            }
+            kprint("\nFormatting complete!\n");
             return;
         }
         else
@@ -1139,7 +1206,7 @@ void shell_execute(char *input)
                 }
             }
             if (found) {
-                load_and_run_binary(arg[0], current_disk, current_dir_cluster);
+                _load_and_run_binary(arg[0], current_disk, current_dir_cluster);
                 return;
             }
 
@@ -1212,7 +1279,11 @@ void rm_recursive(uint8_t drive, uint32_t cluster) {
     }
 }
 
-void load_and_run_binary(const char* filename, uint32_t disk, uint32_t dir_cluster) {
+#define MAX_BIN_SIZE  (64 * 1024) // например, 64 КБ
+
+void _load_and_run_binary(const char* filename, uint32_t disk, uint32_t dir_cluster) {
+    static uint8_t bin_buf[MAX_BIN_SIZE];
+
     fat32_dir_entry_t entries[32];
     int n = fat32_read_dir(disk, dir_cluster, entries, 32);
     if (n < 0) {
@@ -1250,59 +1321,17 @@ void load_and_run_binary(const char* filename, uint32_t disk, uint32_t dir_clust
         return;
     }
 
-    // Читаем ELF заголовок
-    elf32_ehdr_t ehdr;
-    if (fat32_read_file(disk, cluster, (uint8_t*)&ehdr, sizeof(elf32_ehdr_t)) != sizeof(elf32_ehdr_t)) {
-        kprint("Error reading ELF header\n");
+    if (size > MAX_BIN_SIZE) {
+        kprint("Binary too large!\n");
         return;
     }
-
-    // Проверяем магическое число ELF
-    if (ehdr.e_ident[0] != ELFMAG0 || ehdr.e_ident[1] != ELFMAG1 ||
-        ehdr.e_ident[2] != ELFMAG2 || ehdr.e_ident[3] != ELFMAG3) {
-        kprint("Not a valid ELF file\n");
+    if (fat32_read_file(disk, cluster, bin_buf, size) != size) {
+        kprint("Error loading binary\n");
         return;
     }
-
-    // Проверяем, что это 32-битный исполняемый файл
-    if (ehdr.e_ident[4] != ELFCLASS32 || ehdr.e_type != ET_EXEC) {
-        kprint("Not a valid 32-bit executable\n");
-        return;
-    }
-
-    // Читаем заголовки программ
-    elf32_phdr_t phdr;
-    for (int i = 0; i < ehdr.e_phnum; i++) {
-        if (fat32_read_file(disk, cluster, (uint8_t*)&phdr, sizeof(elf32_phdr_t)) != sizeof(elf32_phdr_t)) {
-            kprint("Error reading program header\n");
-            return;
-        }
-
-        if (phdr.p_type == PT_LOAD) {
-            // Выделяем память для сегмента
-            void* mem = malloc(phdr.p_memsz);
-            if (!mem) {
-                kprint("Out of memory\n");
-                return;
-            }
-
-            // Читаем содержимое сегмента
-            if (fat32_read_file(disk, cluster, (uint8_t*)mem, phdr.p_filesz) != phdr.p_filesz) {
-                kprint("Error reading segment\n");
-                mfree(mem);
-                return;
-            }
-
-            // Очищаем оставшуюся память (bss секция)
-            if (phdr.p_memsz > phdr.p_filesz) {
-                memset((uint8_t*)mem + phdr.p_filesz, 0, phdr.p_memsz - phdr.p_filesz);
-            }
-        }
-    }
-
-    // Запускаем программу
-    void (*entry_point)(void) = (void (*)(void))ehdr.e_entry;
-    entry_point();
+    kprintf("[RAW] Jumping to loaded buffer at %p\n", bin_buf);
+    void (*entry)(void) = (void (*)(void))bin_buf;
+    entry();
 }
 
 // Вспомогательная функция: создать директории по пути (если не существуют)
@@ -1380,8 +1409,8 @@ static int ensure_fat32_path(uint8_t disk, const char* path, uint32_t* out_dir_c
                 memset(newsec, 0, 512);
                 // .
                 memset(&newsec[0], ' ', 11); newsec[0] = '.'; newsec[11] = 0x10;
-                *(uint16_t*)(&newsec[20]) = (uint16_t)((new_cl >> 16) & 0xFFFF);
-                *(uint16_t*)(&newsec[26]) = (uint16_t)(new_cl & 0xFFFF);
+                newsec[20] = (uint8_t)((new_cl >> 16) & 0xFF);
+                newsec[26] = (uint8_t)(new_cl & 0xFF);
                 // ..
                 memset(&newsec[32], ' ', 11); newsec[32] = '.'; newsec[33] = '.'; newsec[43] = 0x10;
                 *(uint16_t*)(&newsec[52]) = (uint16_t)((cluster >> 16) & 0xFFFF);
@@ -1437,8 +1466,9 @@ static int isocpy_file(const char* src, const char* dst) {
         return -1;
     }
     // Записать файл
-    if (fat32_write_file(current_disk, cl, (uint8_t*)buf, sz) != sz) {
-        kprintf("isocpy: error writing to FAT32\n");
+    int written = fat32_write_file(current_disk, cl, (uint8_t*)buf, sz);
+    if (written != sz) {
+        kprintf("isocpy: error writing to FAT32 (written=%d, sz=%d)\n", written, sz);
         return -1;
     }
     // Добавить запись в каталог
@@ -1450,7 +1480,7 @@ static int isocpy_file(const char* src, const char* dst) {
     }
     for (int off = 0; off < 512; off += 32) {
         if (sector[off] == 0x00 || sector[off] == 0xE5) {
-            memset(&sector[off], ' ', 11);
+            memset(&sector[off], 0, 11);
             for (int n = 0; n < 11; n++) sector[off + n] = name[n];
             sector[off + 11] = 0x20; // attr: archive
             *(uint16_t*)(&sector[off + 20]) = (uint16_t)((cl >> 16) & 0xFFFF); // high

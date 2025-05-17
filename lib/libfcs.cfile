@@ -1,0 +1,30 @@
+#include "libfcs.h"
+
+// Адрес таблицы экспорта функций ядра
+#define FCS_API_TABLE_ADDR 0xC0001000
+
+typedef void (*kputchar_t)(char, unsigned char);
+typedef void (*kprint_t)(const char*);
+typedef void (*kprintf_t)(const char*, ...);
+typedef int  (*kgetch_t)();
+typedef void (*pit_sleep_t)(int);
+
+static void** fcs_api = (void**)FCS_API_TABLE_ADDR;
+
+void kputchar(char c, unsigned char color) {
+    ((kputchar_t)fcs_api[0])(c, color);
+}
+void kprint(const char* s) {
+    ((kprint_t)fcs_api[1])(s);
+}
+void kprintf(const char* fmt, ...) {
+    // Вариативные функции требуют особой обработки,
+    // но если ядро поддерживает стандартный вызов — можно так:
+    ((kprintf_t)fcs_api[2])(fmt, *((void**)&fmt + 1), *((void**)&fmt + 2), *((void**)&fmt + 3), *((void**)&fmt + 4));
+}
+int kgetch() {
+    return ((kgetch_t)fcs_api[3])();
+}
+void pit_sleep(int ms) {
+    ((pit_sleep_t)fcs_api[4])(ms);
+} 

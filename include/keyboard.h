@@ -88,6 +88,10 @@ struct Key
     uint8_t press;
 };
 
+char *input_shell;
+int shell_enter;
+int shell_barrier = 0;
+
 
 void set_barrier(int n);
 
@@ -96,5 +100,9 @@ void agent_get_string(char *buffer);
 
 char get_acsii_low(char code);
 char get_acsii_high(char code);
+
+struct InterruptRegisters;
+
+void shell_handler(struct InterruptRegisters *regs);
 
 #endif

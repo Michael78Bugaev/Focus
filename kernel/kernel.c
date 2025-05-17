@@ -19,14 +19,10 @@ void kentr() {
     ata_init();
     atapi_init();
     shell_execute("fatmount");
+    kprintf("Path length: %d\n", strlen(get_fat32_path()));
 
-    char *input;
-    for (;;)
-    {
-        print_prompt();
-        get_string(input);
-        shell_execute(input);
-    }
+    start_shell();
+    
 }
 
 void print_prompt() {

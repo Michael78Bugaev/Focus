@@ -26,6 +26,11 @@ void	kputchar(uint8_t character, uint8_t attribute_byte)
 		else
 			set_cursor((offset - offset % (MAX_COLS*2)) + MAX_COLS*2);
 	}
+	else if (character == '\r')
+	{
+		// Переместить курсор в начало текущей строки
+		set_cursor(offset - (offset % (MAX_COLS * 2)));
+	}
 	else if (character == '\b')
     {
         set_cursor(get_cursor() - 1);

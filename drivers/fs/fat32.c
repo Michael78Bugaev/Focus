@@ -6,6 +6,7 @@ fat32_bpb_t fat32_bpb;
 uint32_t fat_start, cluster_begin_lba, sectors_per_fat, root_dir_first_cluster;
 static uint8_t fat_buffer[512];
 uint32_t current_dir_cluster;
+char current_path[256] = "";  // Добавлено для хранения текущего пути
 
 // Локальная функция для перевода символа в верхний регистр
 static char my_toupper(char c) {
@@ -269,6 +270,8 @@ int fat32_write_file(uint8_t drive, const char* path, const uint8_t* buf, uint32
         *(uint32_t*)(&sector[off + 28]) = 0; // file size = 0
         if (ata_write_sector(drive, lba, sector) != 0) return -6;
         first_cluster = cl;
+        // Перечитываем сектор каталога, чтобы запись гарантированно была видна
+        if (ata_read_sector(drive, lba, sector) != 0) return -8;
     } else {
         // Файл найден, перезаписываем
         first_cluster = ((uint32_t)entries[file_idx].first_cluster_high << 16) | entries[file_idx].first_cluster_low;
@@ -296,16 +299,16 @@ int fat32_write_file(uint8_t drive, const char* path, const uint8_t* buf, uint32
     // 3. Обновить размер файла в записи каталога
     uint8_t dir_sector[512];
     uint32_t dir_lba = fat32_cluster_to_lba(current_dir_cluster);
-    if (ata_read_sector(drive, dir_lba, dir_sector) != 0) return -8;
+    if (ata_read_sector(drive, dir_lba, dir_sector) != 0) return -9;
     int off = -1;
     for (int i = 0; i < 512; i += 32) {
         int match = 1;
         for (int k = 0; k < 11; k++) if (fatname[k] != dir_sector[i+k]) { match = 0; break; }
         if (match) { off = i; break; }
     }
-    if (off == -1) return -9;
+    if (off == -1) return -10;
     *(uint32_t*)(&dir_sector[off + 28]) = bytes_written;
-    if (ata_write_sector(drive, dir_lba, dir_sector) != 0) return -10;
+    if (ata_write_sector(drive, dir_lba, dir_sector) != 0) return -11;
     return bytes_written;
 }
 
@@ -484,4 +487,40 @@ int fat32_read_file_data(uint8_t drive, const char* path, uint8_t* buf, uint32_t
         break;
     }
     return bytes_read;
+}
+
+char* get_fat32_path() {
+    static char path[256];  // Статический буфер для хранения пути
+    path[0] = '\0';         // Инициализация пустой строкой
+    
+    // Начинаем с "0:\"
+    strcpy(path, "0:\\");
+    
+    // Если мы не в корневом каталоге, добавляем текущий путь
+    if (current_path[0] != '\0') {
+        strcat(path, current_path);
+    }
+    
+    return path;
+}
+
+int fat32_cd(const char* path) {
+    // Если путь начинается с '/', это абсолютный путь
+    if (path[0] == '/') {
+        current_path[0] = '\0';  // Сбрасываем текущий путь
+        path++;  // Пропускаем начальный '/'
+    }
+    
+    // Если путь не пустой, добавляем его к текущему пути
+    if (path[0] != '\0') {
+        if (current_path[0] != '\0') {
+            strcat(current_path, "/");
+        }
+        strcat(current_path, path);
+    }
+    
+    // Здесь должен быть код для изменения текущего кластера директории
+    // ... existing directory change code ...
+    
+    return 0;  // Успешное выполнение
 }

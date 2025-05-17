@@ -6,12 +6,18 @@
 #include <stdint.h>
 
 #define KEY_APOSTROPHE 0x28
+#define SHELL_HISTORY_SIZE 32
+#define SHELL_CMD_MAXLEN 128
 
 bool capsLock = false;
 bool enter = false;
 bool capsOn = false;
 int barrier = 0;
 char *input;
+
+char shell_history[SHELL_HISTORY_SIZE][SHELL_CMD_MAXLEN];
+int shell_history_count = 0;
+int shell_history_pos = 0;
 
 void handler(struct InterruptRegisters *regs)
 {
@@ -126,6 +132,155 @@ void handler(struct InterruptRegisters *regs)
             //   kprintc("     ", 0x70);
             //   set_cursor(old);
             // }
+            break;
+    }
+}
+
+void shell_handler(struct InterruptRegisters *regs)
+{
+    char scanCode = inb(0x60) & 0x7F;
+	  char press = inb(0x60) & 0x80;
+    //kprint(lowercase[0x22]);
+    switch (scanCode)
+    {
+        case 1:
+        case 29:
+        case 56:
+        case 59:
+        case 60:
+        case 61:
+        case 62:
+        case 63:
+        case 64:
+        case 65:
+        case 66:
+        case 67:
+        case 68:
+        case 87:
+        case 88:
+            break;
+        case 42:
+            if (press == 0) {
+                capsOn = true;
+            }else{
+                capsOn = false;
+            }
+            break;
+        case 58:
+            if (!capsLock && press == 0)
+            {
+                capsLock = true;
+            }
+            else if (capsLock && press == 0)
+            {
+                capsLock = false;
+            }
+            break;
+        case 0x29:
+            if (press)
+                kprint("~");
+                join(input_shell, '~');
+            break;
+        case KEY_APOSTROPHE:
+            if (press == 0) {
+                if (capsOn || capsLock) {
+                    kputchar('"', 0x0f);
+                    join(input_shell, '"');
+                } else {
+                    kputchar('\'', 0x0f);
+                    join(input_shell, '\'');
+                }
+            }
+            break;
+        case 0x0E:
+            if (press == 0)
+                if (get_cursor_x() > barrier)
+                {
+                  backspace_func(input_shell);
+                  kprint("\b");
+                }
+            break;
+        case 0x1C:
+            if (press == 0)
+            {
+                kprint("\n");
+                shell_enter = true;
+                if (strlen(input_shell) > 0) {
+                    if (shell_history_count == 0 || strcmp(input_shell, shell_history[(shell_history_count-1) % SHELL_HISTORY_SIZE]) != 0) {
+                        strncpy(shell_history[shell_history_count % SHELL_HISTORY_SIZE], input, SHELL_CMD_MAXLEN-1);
+                        shell_history[shell_history_count % SHELL_HISTORY_SIZE][SHELL_CMD_MAXLEN-1] = 0;
+                        shell_history_count++;
+                    }
+                }
+                shell_history_pos = shell_history_count;
+                return;
+            }
+            else;    
+                
+            break;
+        case 0x0F:
+            if (press);
+            break;
+        case KEY_SQUARE_CLOSE_BRACKET:
+            if (press == 0) {
+                if (capsOn || capsLock) {
+                    kputchar('}', 0x0f);
+                    join(input_shell, '}');
+                } else {
+                    kputchar(']', 0x0f);
+                    join(input_shell, ']');
+                }
+            }
+            break;
+        case KEY_UP: // Up arrow
+            if (press == 0) {
+                if (shell_history_count > 0 && shell_history_pos > 0) {
+                    shell_history_pos--;
+                    // Очистить текущую строку ввода
+                    int len = strlen(input_shell);
+                    set_cursor_x(shell_barrier);
+                    for (int i = 0; i < len; i++) kputchar(' ', 0x07);
+                    set_cursor_x(shell_barrier);
+                    // Подставить команду из истории
+                    strcpy(input_shell, shell_history[shell_history_pos % SHELL_HISTORY_SIZE]);
+                    kprint(input_shell);
+                }
+            }
+            break;
+        case KEY_DOWN: // Down arrow
+            if (press == 0) {
+                if (shell_history_pos < shell_history_count - 1) {
+                    shell_history_pos++;
+                    int len = strlen(input_shell);
+                    set_cursor_x(shell_barrier);
+                    for (int i = 0; i < len; i++) kputchar(' ', 0x07);
+                    set_cursor_x(shell_barrier);
+                    strcpy(input_shell, shell_history[shell_history_pos % SHELL_HISTORY_SIZE]);
+                    kprint(input_shell);
+                } else {
+                    // Пустая строка
+                    int len = strlen(input_shell);
+                    set_cursor_x(shell_barrier);
+                    for (int i = 0; i < len; i++) kputchar(' ', 0x07);
+                    set_cursor_x(shell_barrier);
+                    input_shell[0] = 0;
+                }
+            }
+            break;
+        default:
+            if (press == 0)
+            {
+                if (capsOn || capsLock)
+                {
+                    kputchar(get_acsii_high(scanCode), 0x0f);
+                    join(input_shell, get_acsii_high(scanCode));
+                }
+                else
+                {
+                    kputchar(get_acsii_low(scanCode), 0x0f);
+                    join(input_shell, get_acsii_low(scanCode));
+                }
+            }
             break;
     }
 }
