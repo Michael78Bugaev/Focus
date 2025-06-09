@@ -1,17 +1,25 @@
 # FocusOS
 
+<div align="center">
+
 ![FocusOS Screenshot 1](https://github.com/Michael78Bugaev/Focus/blob/master/images/focus1.png?v=2)
 
 A modern 32-bit operating system written in C and Assembly, featuring a custom shell, FAT32 filesystem support, and a built-in assembly compiler.
 
 ![FocusOS Screenshot 2](https://github.com/Michael78Bugaev/Focus/blob/master/images/focus2.png?v=2)
 
-## 
+</div>
 
-|  |  |
+## Screenshots
+
+<div align="center">
+
+| Description | Screenshot |
 |-------------|------------|
 | FocusOS Shell with directory listing and command prompt | ![FocusOS Shell](https://github.com/Michael78Bugaev/Focus/blob/master/images/focus3.png?v=2) |
 | Built-in text editor in action | ![FocusOS Editor](https://github.com/Michael78Bugaev/Focus/blob/master/images/focus4.png?v=2) |
+
+</div>
 
 ## Features
 
