@@ -11,7 +11,7 @@ bool capsLock = false;
 bool enter = false;
 bool capsOn = false;
 int barrier = 0;
-char *input;
+static char input[256];
 
 void handler(struct InterruptRegisters *regs)
 {
@@ -147,26 +147,26 @@ int backspace_func(char buffer[])
 void get_string(char *buffer)
 {
     barrier = get_cursor_x();
-    strnone(input);
+    input[0] = '\0';
     while (enter != true)
     {
       irq_install_handler(1, &handler);
     }
     enter = false;
-    strncpy(buffer, input, strlen(buffer));
-    
+    strncpy(buffer, input, strlen(input) + 1);
 }
 void agent_handler(struct InterruptRegisters *regs);
 
 void agent_get_string(char *buffer)
 {
-    strnone(input);
+    barrier = get_cursor_x();
+    input[0] = '\0';
     while (enter != true)
     {
       irq_install_handler(1, &agent_handler);
     }
     enter = false;
-    strncpy(buffer, input, strlen(buffer));
+    strncpy(buffer, input, strlen(input) + 1);
 }
 
 void agent_handler(struct InterruptRegisters *regs)
@@ -467,4 +467,27 @@ char get_acsii_high(char code)
   default:
     return 0;
   }
+}
+
+char scnd_key = 0;
+void scnd_handler(struct InterruptRegisters *regs);
+char get_key(void)
+{
+    scnd_key = 0;
+    while (scnd_key == 0)
+    {
+        irq_install_handler(1, &scnd_handler);
+    }
+    irq_uninstall_handler(1);
+    return scnd_key;
+}
+
+void scnd_handler(struct InterruptRegisters *regs)
+{
+    char scanCode = inb(0x60) & 0x7F;
+	  char press = inb(0x60) & 0x80;
+    if (press == 0)
+    {
+        scnd_key = scanCode;
+    }
 }

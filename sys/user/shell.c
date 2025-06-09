@@ -9,12 +9,14 @@
 #include <elf.h>
 #include <iso9660.h>
 
+extern void snake_main();
+
 // Прототипы функций
 static int isocpy_file(const char* src, const char* dst);
 static int isocpy_dir(const char* src, const char* dst);
 
 int current_disk = 0;
-uint8_t * ide_buf; // Buffer for read/write operations
+static uint8_t ide_buf[512]; // Buffer for read/write operations
 
 // Prototypes of functions
 uint8_t hex_to_int(char c);
@@ -161,6 +163,7 @@ void shell_execute(char *input)
             kprint("    isols - list files in ISO9660 volume\n");
             kprint("    isocat <filename> - display content of ISO9660 file\n");
             kprint("    isocpy [-r] <src> <dst> - copy file or directory from ISO9660 to FAT32\n");
+            kprint("    snake - run snake game\n");
             return;
         }
         else if (strcmp(arg[0], "clear") == 0)
@@ -1089,6 +1092,7 @@ void shell_execute(char *input)
                 return;
             }
             char buf[4096];
+            kprintf("Reading file from ISO...\n");
             int sz = iso9660_read(arg[1], buf, sizeof(buf)-1);
             if (sz < 0) {
                 kprint("Error reading file from ISO\n");
@@ -1113,6 +1117,11 @@ void shell_execute(char *input)
             } else {
                 isocpy_file(arg[src_idx], arg[src_idx+1]);
             }
+            return;
+        }
+        else if (strcmp(arg[0], "snake") == 0)
+        {
+            snake_main();
             return;
         }
         else

@@ -12,7 +12,7 @@ int old_ticks;
 
 void on_irq0(struct InterruptRegisters *regs){
     ticks += 1;
-    
+    //vbe_swap();
 }
 
 void init_pit(){

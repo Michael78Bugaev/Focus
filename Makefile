@@ -2,7 +2,7 @@
 CC = gcc
 AS = nasm
 LD = ld
-CFLAGS=-c -g -fcommon -Werror -Wimplicit -w -I include/ -ffreestanding -m32 -fno-inline-functions -O2 -fno-omit-frame-pointer
+CFLAGS=-DUSE_VBE -c -g -fcommon -Werror -Wimplicit -w -I include/ -ffreestanding -m32 -fno-inline-functions -O2 -fno-omit-frame-pointer
 CPPFLAGS=-c -g -fcommon -Werror -w -I ./include/ -ffreestanding -m32 -fno-inline-functions -O2 -fno-omit-frame-pointer
 ASMFLAGS=-f elf32
 LDFLAGS= -T link.ld --allow-multiple-definition -m elf_i386
@@ -55,7 +55,7 @@ kernel: $(C_OBJECTS) $(ASM_OBJECTS)
 	@$(LD) $(LDFLAGS) -o $(BUILD_DIR)/kernel $^
 	@cp $(BUILD_DIR)/kernel ./iso/boot/
 	@grub-mkrescue -o focusos.iso ./iso
-	@qemu-system-i386 -m 1500M -drive file=hda.img,format=raw,if=ide -cdrom focusos.iso -boot d -serial stdio
+	@qemu-system-i386 -m 1500M -drive file=../hda.img,format=raw,if=ide -cdrom focusos.iso -boot d -serial stdio
 
 # Цель для очистки
 clean:

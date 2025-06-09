@@ -97,4 +97,6 @@ void agent_get_string(char *buffer);
 char get_acsii_low(char code);
 char get_acsii_high(char code);
 
+char get_key(void);
+
 #endif

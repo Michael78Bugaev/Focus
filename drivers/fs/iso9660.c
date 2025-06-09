@@ -10,7 +10,8 @@
 struct iso9660_pvd g_pvd;
 uint32_t g_root_dir_lba = 0;
 uint32_t g_root_dir_size = 0;
-int iso9660_atapi_devnum = 2; // по умолчанию 2 (secondary master)
+// Default to primary slave (0:1), which is typical QEMU CD-ROM configuration
+int iso9660_atapi_devnum = 1; // was 2 (secondary master)
 
 // Вспомогательная функция для сравнения имён файлов (без учёта ;1)
 static int iso9660_namecmp(const char* iso_name, size_t iso_len, const char* path) {
@@ -43,7 +44,9 @@ int iso9660_mount() {
 // Поиск файла только в корневом каталоге (упрощённо)
 int iso9660_find(const char* path, uint32_t* lba, uint32_t* size) {
     uint8_t sector[ISO9660_SECTOR_SIZE];
+    kprintf("Root dir LBA: %d, Size: %d\n", g_root_dir_lba, g_root_dir_size);
     if (atapi_read_device(iso9660_atapi_devnum, g_root_dir_lba, 1, sector) != 0) return -1;
+    kprintf("Sector: %d\n", sector[0]);
     size_t offset = 0;
     while (offset < ISO9660_SECTOR_SIZE) {
         uint8_t len = sector[offset];
@@ -57,6 +60,7 @@ int iso9660_find(const char* path, uint32_t* lba, uint32_t* size) {
         }
         offset += len;
     }
+    kprintf("File not found\n");
     return -2;
 }
 
@@ -64,10 +68,19 @@ int iso9660_find(const char* path, uint32_t* lba, uint32_t* size) {
 int iso9660_read(const char* path, void* buffer, uint32_t max_size) {
     uint32_t lba, size;
     if (iso9660_find(path, &lba, &size) != 0) return -1;
-    if (size > max_size) size = max_size;
+    // Calculate how many sectors fit in buffer
+    uint32_t max_sectors = max_size / ISO9660_SECTOR_SIZE;
     uint32_t sectors = (size + ISO9660_SECTOR_SIZE - 1) / ISO9660_SECTOR_SIZE;
-    if (atapi_read_device(iso9660_atapi_devnum, lba, sectors, buffer) != 0) return -2;
-    return size;
+    if (sectors > max_sectors) sectors = max_sectors;
+    if (sectors == 0) return 0;
+    for (uint32_t i = 0; i < sectors; i++) {
+        if (atapi_read_device(iso9660_atapi_devnum, lba + i, 1,
+            (uint8_t*)buffer + i * ISO9660_SECTOR_SIZE) != 0) return -2;
+    }
+    // Return actual bytes read
+    uint32_t bytes = sectors * ISO9660_SECTOR_SIZE;
+    if (bytes > size) bytes = size;
+    return bytes;
 }
 
 // ... реализация будет добавлена ... 

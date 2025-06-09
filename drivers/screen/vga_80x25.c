@@ -3,6 +3,7 @@
 #include <vga.h>
 #include <string.h>
 
+#ifndef USE_VBE
 uint8_t unicode_to_cp437(uint16_t unicode);
 
 void	kprint(uint8_t *str)
@@ -356,3 +357,4 @@ void kprintf(const char* format, ...) {
         }
     }
 }
+#endif // USE_VBE

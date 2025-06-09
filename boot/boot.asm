@@ -3,8 +3,8 @@ BITS 32
 section .multiboot
     ALIGN 4
     DD 0x1BADB002
-    DD 0 ; VBE - 5
-    DD -(0x1BADB002 + 0) ; VBE - 5
+    DD 5 ; VBE - 5
+    DD -(0x1BADB002 + 5) ; VBE - 5
     dd 0
     dd 0
     dd 0
@@ -12,8 +12,8 @@ section .multiboot
     dw 5
     dw 0 ;instead of 0, you can specify your flags
     dd 0
-    dd 640 ;instead of 1024, you can specify your width
-    dd 400 ;instead of 768, you can specify your height
+    dd 800 ;instead of 1024, you can specify your width
+    dd 600 ;instead of 768, you can specify your height
     dd 8 ;instead of 32, you can specify your BPP
 
 global start

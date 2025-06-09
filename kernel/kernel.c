@@ -5,6 +5,7 @@
 #include <idt.h>
 #include <fat32.h>
 #include <paging.h>
+#include <vbe_terminal.h>
 /*
  * WARNING:
  * Always open this file at codepage CP437!
@@ -22,6 +23,8 @@ void kentr(uint32_t magic, struct multiboot_info *mbi) {
     init_pit();
     qemu_debug_printf("PIT initialized\n");
     init_dmem();
+    vbe_init(mbi);
+    //draw_pixel(fb, 0, 0, 0x0F);
     ata_init();
     atapi_init();
     shell_execute("fatmount");
@@ -29,7 +32,7 @@ void kentr(uint32_t magic, struct multiboot_info *mbi) {
     kprintf("Press any key to continue...\n");
     kgetch();
     kclear();
-    kprintf("<(05)>ŸOCUS<(07)> Operating System v1.3 <(0f)>\n<(0a)>Copyright MIT v3.0 License<(0f)>\n");
+    kprintf("<(05)>ŸOCUS<(07)> Operating System v1.5 <(0f)>\n<(0a)>Copyright MIT v3.0 License<(0f)>\n");
     kprintf("Created by Michael Bugaev\n\n");
     kprintf("%c FCSASM Compiler\n", 0x1a);
     kprintf("%c FAT32 File System\n\n", 0x1a);
