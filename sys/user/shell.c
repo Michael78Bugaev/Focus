@@ -3,7 +3,6 @@
 #include <string.h>
 #include <ata.h>
 #include <fat32.h>
-#include "edit.c"
 #include <fcsasm.h>
 #include <fcs_vm.h>
 #include <elf.h>
@@ -104,8 +103,8 @@ void shell_execute_fsc(const char* fname) {
         kprintf("Cannot read script: %s\n", fname);
         return;
     }
-    char buffer[MAX_FILE_SIZE];
-    int size = fat32_read_file(current_disk, cl, (uint8_t*)buffer, MAX_FILE_SIZE-1);
+    char buffer[4096];
+    int size = fat32_read_file(current_disk, cl, (uint8_t*)buffer, 4095);
     if (size <= 0) {
         kprintf("Cannot read script: %s\n", fname);
         return;
@@ -181,6 +180,11 @@ void shell_execute(char *input)
             bootsec[510] = 0x55;
             bootsec[511] = 0xAA;
 
+            return;
+        }
+        else if (strcmp(arg[0], "setup") == 0)
+        {
+            kclear_color(0x01);
             return;
         }
         else if (strcmp(arg[0], "disk") == 0)
@@ -529,28 +533,40 @@ void shell_execute(char *input)
         else if (strcmp(arg[0], "fatmkfs") == 0)
         {
             // Minimal x86 bootloader (BIOS, 16 bit)
-            const uint8_t bootloader_bin[62] = {
-                0xEB, 0x3C, 0x90, // jmp short 0x3E
-                // OEM and BPB will be filled below
-                // offset 0x3E (62)
-                0xB4, 0x0E,             // mov ah, 0x0E
-                0xBB, 0x07, 0x00,       // mov bx, 0x0007
-                0xBE, 0x4E, 0x00,       // mov si, 0x004E
-                0xAC,                   // lodsb
-                0x3C, 0x00,             // cmp al, 0
-                0x74, 0x06,             // je .hang
-                0xCD, 0x10,             // int 0x10
-                0xEB, 0xF6,             // jmp .loop
-                0xF4,                   // hlt
-                0xEB, 0xFE              // jmp $
+            uint8_t bootloader_bin_[62] = {
+                0xEB, 0x21, 0x90,             /* jmp short start (to 0x21) */
+                /* BPB (заполняется ниже) */
+                /* offset 0x21 (start): */
+                0xB8, 0x00, 0x7C,             /* mov ax,0x7C00 */
+                0x8E, 0xD8,                   /* mov ds,ax */
+                0xBE, 0x4E, 0x00,             /* mov si,0x4E */
+                /* loop: */
+                0xAC,                         /* lodsb */
+                0x0C, 0x00,                   /* or al,al */
+                0x74, 0x09,                   /* jz hang */
+                0xB4, 0x0E,                   /* mov ah,0x0E */
+                0xBB, 0x07, 0x00,             /* mov bx,0x0007 */
+                0xCD, 0x10,                   /* int 0x10 */
+                0xEB, 0xF3,                   /* jmp short loop */
+                /* hang: */
+                0xF4,                         /* hlt */
+                0xEB, 0xFE,                   /* jmp $ */
+                /* padding до 62 байт */
+                0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+                0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+                0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+                0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
             };
             const char bootmsg[] = "This is not a bootable disk\r\n";
-            uint8_t sector[512];
+            uint8_t* sector = malloc(512);
+            if (!sector) {
+                kprint("Error allocating memory\n");
+                return;
+            }
             memset(sector, 0, 512);
-            // Insert bootloader
-            strncpy(sector, bootloader_bin, sizeof(bootloader_bin));
-            strncpy(sector + 0x4E, bootmsg, sizeof(bootmsg));
-            // BPB and labels (as before)
+            // 1. Jump (3 байта)
+            sector[0] = 0xEB; sector[1] = 0x3C; sector[2] = 0x90;
+            // 2. BPB (с 3 по 0x3A)
             strncpy((char*)&sector[3], "MSDOS5.0", 8); // OEM
             *(uint16_t*)&sector[11] = 512; // bytes per sector
             sector[13] = 1; // sectors per cluster
@@ -563,7 +579,7 @@ void shell_execute(char *input)
             *(uint16_t*)&sector[24] = 63; // sectors per track
             *(uint16_t*)&sector[26] = 255; // heads
             *(uint32_t*)&sector[28] = 0; // hidden sectors
-            *(uint32_t*)&sector[32] = 65536; // total sectors 32 (example: 32 MB)
+            *(uint32_t*)&sector[32] = 65536; // total sectors 32 (пример: 32 МБ)
             *(uint32_t*)&sector[36] = 123; // FAT size 32
             *(uint16_t*)&sector[44] = 0; // ext flags
             *(uint16_t*)&sector[46] = 0; // FAT version
@@ -575,6 +591,12 @@ void shell_execute(char *input)
             *(uint32_t*)&sector[67] = 0x12345678; // volume id
             strncpy((char*)&sector[71], "FOCUSOS    ", 11); // volume label
             strncpy((char*)&sector[82], "FAT32   ", 8);      // fat type label
+            // 3. Код загрузчика (начиная с 0x3E)
+            for (int i = 0; i < (int)(sizeof(bootloader_bin_) - 3); i++)
+                sector[0x3E + i] = bootloader_bin_[3 + i];
+            // 4. Сообщение (начиная с 0x4E)
+            for (int i = 0; i < (int)sizeof(bootmsg); i++)
+                sector[0x4E + i] = bootmsg[i];
             sector[510] = 0x55; sector[511] = 0xAA;
             // Write Boot Sector
             if (ata_write_sector(current_disk, 0, sector) != 0) {
@@ -680,7 +702,119 @@ void shell_execute(char *input)
             kprint("No free entry\n");
             return;
         }
-        else if (strcmp(arg[0], "mkdir") == 0)
+        else if (strcmp(arg[0], "isotools") == 0)
+        {
+            kprintf("<(0a)>isotools v1.0 (Focus v1.5)<(0f)>\n");
+            kprintf("Copyright 2025 Michael Bugaev\n");
+            kprintf("License MIT: <(0b)>https://opensource.org/licenses/MIT<(0f)>\n");
+            kprintf("This is free software: you are free to change and redistribute it.\n");
+            kprintf("There is NO WARRANTY, to the extent permitted by law.\n");
+            kprintf("Type 'help' for more information.\n");
+            kprintf("Type 'exit' or 'quit' to exit.\n\n");
+            int devnum = iso9660_atapi_devnum;
+            kprintf("Current ATAPI CD-ROM: <(0e)>#%d<(0f)>\n\n", devnum);
+            uint8_t *cmd = malloc(1024);
+            if (!cmd) {
+                kprintf("<(04)>Error allocating memory<(0f)>\n\n");
+                return;
+            }
+            while (1) {
+                kprintf("<(08)>[isotools] ");
+                get_string(cmd);
+                // Разбиваем cmd на подкоманды
+                int sub_count = 0;
+                char **subarg = splitString(cmd, &sub_count);
+                if (sub_count == 0) continue;
+                if (strcmp(subarg[0], "exit") == 0) break;
+                if (strcmp(subarg[0], "mount") == 0) {
+                    int devnum = iso9660_atapi_devnum;
+                    if (sub_count > 1) devnum = atoi(subarg[1]);
+                    if (iso9660_mount_dev(devnum) == 0) {
+                        kprintf("ISO9660 successfully mounted (ATAPI #%d)\n", devnum);
+                    } else {
+                        kprintf("<(04)>Error mounting ISO9660<(0f)>\n\n");
+                    }
+
+
+                } 
+                if (strcmp(subarg[0], "quit") == 0) break;
+                else if (strcmp(subarg[0], "ls") == 0) {
+                    uint8_t sector[2048];
+                    extern uint32_t g_root_dir_lba, g_root_dir_size;
+                    if (atapi_read_device(iso9660_atapi_devnum, g_root_dir_lba, 1, sector) != 0) {
+                        kprintf("<(04)>Error reading ISO root directory<(0f)>\n\n");
+                        continue;
+                    }
+                    kprintf("ISO9660 root directory:\n");
+                    size_t offset = 0;
+                    while (offset < ISO9660_SECTOR_SIZE) {
+                        uint8_t len = sector[offset];
+                        if (len == 0) break;
+                        uint8_t name_len = sector[offset+32];
+                        char* name = (char*)&sector[offset+33];
+                        if (!(name_len == 1 && (name[0] == 0 || name[0] == 1))) {
+                            int real_len = 0;
+                            for (int j = 0; j < name_len; j++) {
+                                if (name[j] == ';') break;
+                                real_len++;
+                            }
+                            char fname[256];
+                            strncpy(fname, name, real_len);
+                            fname[real_len] = 0;
+                            kprintf(" %s\n", fname);
+                        }
+                        int entry_len = len;
+                        if ((33 + name_len) % 2 != 0) entry_len++;
+                        offset += len;
+                    }
+                } else if (strcmp(subarg[0], "cat") == 0) {
+                    if (sub_count < 2) {
+                        kprint("Usage: cat <filename>\n");
+                        continue;
+                    }
+                    char* buf = malloc(4096);
+                    if (!buf) {
+                        kprint("<(04)>Error allocating memory<(0f)>\n\n");
+                        continue;
+                    }
+                    kprintf("<(0a)>Reading file from ISO...<(0f)>\n");
+                    toupper(subarg[1]);
+                    int sz = iso9660_read(subarg[1], buf, 4095);
+                    if (sz < 0) {
+                        kprintf("<(04)>Error reading file from ISO<(0f)>\n\n");
+                        mfree(buf);
+                        continue;
+                    }
+                    buf[sz] = 0;
+                    kprintf("%s\n", buf);
+                    mfree(buf);
+                } else if (strcmp(subarg[0], "cp") == 0) {
+                    if (sub_count < 3) {
+                        kprint("Usage: cp [-r] <src> <dst>\n");
+                        continue;
+                    }
+                    int recursive = 0;
+                    int src_idx = 1;
+                    if (strcmp(subarg[1], "-r") == 0) {
+                        recursive = 1;
+                        src_idx = 2;
+                    }
+                    if (recursive) {
+                        toupper(subarg[src_idx]);
+                        isocpy_dir(subarg[src_idx], subarg[src_idx+1]);
+                    } else {
+                        toupper(subarg[src_idx]);
+                        isocpy_file(subarg[src_idx], subarg[src_idx+1]);
+                    }
+                } else if (strcmp(subarg[0], "help") == 0) {
+                    kprintf("isotools commands:\n  mount [devnum]\n  ls\n  cat <filename>\n  cp [-r] <src> <dst>\n  exit\n");
+                } else {
+                    kprintf("<(04)>Unknown isotools command: %s<(0f)>\n\n", subarg[0]);
+                }
+            }
+            mfree(cmd);
+            return;
+        } else if (strcmp(arg[0], "mkdir") == 0)
         {
             if (count < 2) {
                 kprint("Usage: mkdir [DIRNAME]\n");
@@ -941,7 +1075,7 @@ void shell_execute(char *input)
         else if (strcmp(arg[0], "echo") == 0)
         {
             if (count < 2) {
-                kprint("Usage: echo [message]\n");
+                kprintf("Usage: echo [message]\nYou can use <(1e)>color codes<(0f)> to change color of the message.\n");
                 return;
             }
             
@@ -963,7 +1097,15 @@ void shell_execute(char *input)
             message[pos] = '\n';
             message[pos + 1] = 0;
             
-            kprint(message);
+            kprintf(message);
+            return;
+        }
+        else if (strcmp(arg[0], "sh") == 0)
+        {
+            while (1)
+            {
+                
+            }
             return;
         }
         else if (strcmp(arg[0], "pause") == 0)
@@ -1091,7 +1233,11 @@ void shell_execute(char *input)
                 kprint("Usage: isocat <filename>\n");
                 return;
             }
-            char buf[4096];
+            char* buf = malloc(4096);
+            if (!buf) {
+                kprint("Error allocating memory\n");
+                return;
+            }
             kprintf("Reading file from ISO...\n");
             int sz = iso9660_read(arg[1], buf, sizeof(buf)-1);
             if (sz < 0) {
@@ -1100,6 +1246,7 @@ void shell_execute(char *input)
             }
             buf[sz] = 0;
             kprint(buf);
+            mfree(buf);
             return;
         } else if (strcmp(arg[0], "isocpy") == 0) {
             if (count < 3) {
@@ -1117,6 +1264,15 @@ void shell_execute(char *input)
             } else {
                 isocpy_file(arg[src_idx], arg[src_idx+1]);
             }
+            return;
+        }
+        else if (strcmp(arg[0], "testfont") == 0)
+        {
+            // Testing VBE fonts
+            for (int i = 0; i < 256; i++) {
+                kprintf("%c", i);
+            }
+            kprint("\n");
             return;
         }
         else if (strcmp(arg[0], "snake") == 0)
@@ -1409,10 +1565,15 @@ static int ensure_fat32_path(uint8_t disk, const char* path, uint32_t* out_dir_c
 
 // Копирование файла из ISO9660 в FAT32 с поддержкой абсолютного пути
 static int isocpy_file(const char* src, const char* dst) {
-    char buf[4096];
+    char* buf = malloc(4096);
+    if (!buf) {
+        kprintf("<(04)>Error allocating memory<(0f)>\n");
+        return -1;
+    }
     int sz = iso9660_read(src, buf, sizeof(buf));
     if (sz < 0) {
-        kprintf("isocpy: cannot read %s from ISO\n", src);
+        kprintf("<(04)>Error reading %s from ISO<(0f)>\n", src);
+        mfree(buf);
         return -1;
     }
     // Разбираем путь назначения
@@ -1421,7 +1582,8 @@ static int isocpy_file(const char* src, const char* dst) {
     if (dst[1] == ':' && (dst[2] == '\\' || dst[2] == '/')) {
         // Абсолютный путь
         if (ensure_fat32_path(current_disk, dst, &dir_cluster, fatname) != 0) {
-            kprintf("isocpy: error creating path %s\n", dst);
+            kprintf("<(04)>Error creating path %s<(0f)>\n", dst);
+            mfree(buf);
             return -1;
         }
     } else {
@@ -1443,19 +1605,22 @@ static int isocpy_file(const char* src, const char* dst) {
     // Найти свободный кластер
     uint32_t cl = find_free_cluster(current_disk);
     if (cl == 0) {
-        kprintf("isocpy: no free cluster\n");
+        kprintf("<(04)>No free cluster<(0f)>\n");
+        mfree(buf);
         return -1;
     }
+    int res = fat32_write_file(current_disk, cl, (uint8_t*)buf, sz);
     // Записать файл
-    if (fat32_write_file(current_disk, cl, (uint8_t*)buf, sz) != sz) {
-        kprintf("isocpy: error writing to FAT32\n");
+    if (res != sz) {
+        kprintf("<(04)>Error writing to FAT32. Code: %d<(0f)>\n", res);
+        mfree(buf);
         return -1;
     }
     // Добавить запись в каталог
     uint8_t sector[512];
     uint32_t lba = fat32_cluster_to_lba(dir_cluster);
     if (ata_read_sector(current_disk, lba, sector) != 0) {
-        kprintf("isocpy: error reading dir\n");
+        kprintf("<(04)>Error reading dir<(0f)>\n");
         return -1;
     }
     for (int off = 0; off < 512; off += 32) {
@@ -1467,14 +1632,14 @@ static int isocpy_file(const char* src, const char* dst) {
             *(uint16_t*)(&sector[off + 26]) = (uint16_t)(cl & 0xFFFF); // low
             *(uint32_t*)(&sector[off + 28]) = sz;
             if (ata_write_sector(current_disk, lba, sector) != 0) {
-                kprintf("isocpy: error writing dir\n");
+                kprintf("<(04)>Error writing dir<(0f)>\n");
                 return -1;
             }
-            kprintf("isocpy: copied %s -> %s (%d bytes)\n", src, dst, sz);
+            kprintf("<(0a)>Copied %s -> %s (%d bytes)<(0f)>\n", src, dst, sz);
             return 0;
         }
     }
-    kprintf("isocpy: no free entry in dir\n");
+    kprintf("<(04)>No free entry in dir<(0f)>\n");
     return -1;
 }
 

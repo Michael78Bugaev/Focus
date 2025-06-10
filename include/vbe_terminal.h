@@ -11,4 +11,6 @@ void vbe_init(struct multiboot_info *mbi);
 // Terminal functions (override VGA text mode)
 void kputchar(uint8_t ch, uint8_t attr);
 void kclear(void);
-void kprint(uint8_t *str); 
+void kprint(uint8_t *str);
+
+extern int cursor_blink; 

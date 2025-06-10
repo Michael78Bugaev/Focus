@@ -28,17 +28,22 @@ void kentr(uint32_t magic, struct multiboot_info *mbi) {
     ata_init();
     atapi_init();
     shell_execute("fatmount");
-    shell_execute("isomount");
+    shell_execute("isomount 2");
     kprintf("Press any key to continue...\n");
     kgetch();
     kclear();
-    kprintf("<(05)>ŸOCUS<(07)> Operating System v1.5 <(0f)>\n<(0a)>Copyright MIT v3.0 License<(0f)>\n");
+    kprintf("<(05)>FOCUS<(07)> Operating System v1.5 <(0f)>\n<(0a)>Copyright MIT v3.0 License<(0f)>\n");
     kprintf("Created by Michael Bugaev\n\n");
     kprintf("%c FCSASM Compiler\n", 0x1a);
     kprintf("%c FAT32 File System\n\n", 0x1a);
     kprintf("Project: <(0b)>https://github.com/Michael78Bugaev/Focus/tree/master<(0f)> \nWritten in C and Assembly. Enjoy!\n");
 
-    char *input;
+    char *input = malloc(1024);
+    if (!&input)
+    {
+        kprintf("Error allocating memory\n");
+        return;
+    }
     for (;;)
     {
         print_prompt();

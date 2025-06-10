@@ -43,7 +43,11 @@ int iso9660_mount() {
 
 // Поиск файла только в корневом каталоге (упрощённо)
 int iso9660_find(const char* path, uint32_t* lba, uint32_t* size) {
-    uint8_t sector[ISO9660_SECTOR_SIZE];
+    uint8_t* sector = malloc(ISO9660_SECTOR_SIZE);
+    if (!sector) {
+        kprintf("Error allocating memory\n");
+        return -1;
+    }
     kprintf("Root dir LBA: %d, Size: %d\n", g_root_dir_lba, g_root_dir_size);
     if (atapi_read_device(iso9660_atapi_devnum, g_root_dir_lba, 1, sector) != 0) return -1;
     kprintf("Sector: %d\n", sector[0]);
@@ -61,6 +65,7 @@ int iso9660_find(const char* path, uint32_t* lba, uint32_t* size) {
         offset += len;
     }
     kprintf("File not found\n");
+    mfree(sector);
     return -2;
 }
 

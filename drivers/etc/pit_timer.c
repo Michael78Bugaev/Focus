@@ -4,15 +4,26 @@
 #include <vga.h>
 #include <pit.h>
 
-uint64_t ticks;
+uint32_t ticks;
 const uint32_t freq = 1000;
 
 int target = 0;
 int old_ticks;
+int cursor_blink = 0;
+// Делаем доступным для других файлов
+extern int cursor_blink;
 
 void on_irq0(struct InterruptRegisters *regs){
     ticks += 1;
-    //vbe_swap();
+
+    // Мигаем курсором каждые 500 мс (freq=1000, значит 500 тиков)
+    if (ticks % 200 == 0) {
+        cursor_blink = !cursor_blink;
+        draw_cursor(cursor_blink);
+    }
+    if (ticks % 9 == 0) {
+        vbe_swap();
+    }
 }
 
 void init_pit(){
