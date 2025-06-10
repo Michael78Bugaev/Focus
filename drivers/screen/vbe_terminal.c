@@ -16,7 +16,7 @@ static int _cursor_drawn = 0;
 static uint32_t _cursor_prev_x, _cursor_prev_y;
 static uint8_t _cursor_saved[FONT_WIDTH * FONT_HEIGHT];
 static uint16_t background_color;
-unsigned char font8x16[][16] = {
+static const char font8x16[][16] = {
         { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  },       //0x00, 
         { 0x00, 0x00, 0x7E, 0x81, 0xA5, 0x81, 0x81, 0xBD, 0x99, 0x81, 0x81, 0x7E, 0x00, 0x00, 0x00, 0x00,  },       //0x01, 
         { 0x00, 0x00, 0x7E, 0xFF, 0xDB, 0xFF, 0xFF, 0xC3, 0xE7, 0xFF, 0xFF, 0x7E, 0x00, 0x00, 0x00, 0x00,  },       //0x02, 
@@ -165,12 +165,17 @@ void vbe_init(struct multiboot_info *mbi) {
     width = mbi->framebuffer_width;
     height = mbi->framebuffer_height;
     bpp = mbi->framebuffer_bpp;
-
+    qemu_debug_printf("before malloc\n");
     backbuf = malloc(width * height);
+    if (!backbuf) {
+        qemu_debug_printf("Error allocating memory for backbuf\n");
+        return;
+    }
+    qemu_debug_printf("after malloc\n");
     cursor_x = cursor_y = 0;
     memset(backbuf, 0, width * height);
-    draw_pixel(backbuf, 0, 0, 0x0F);
-    //vbe_swap();
+
+    qemu_debug_printf("VBE initialized\n");
 }
 
 void kclear(void) {
@@ -457,6 +462,29 @@ void draw_cursor(int blink) {
                 draw_pixel(backbuf, x * FONT_WIDTH + c, y * FONT_HEIGHT + FONT_HEIGHT - 2, 0x00);
             }
             _cursor_drawn = 0;
+        }
+    }
+}
+
+// Print 16-color BMP image at specified pixel offset x,y
+void print_bmp16(uint8_t* bmp_data, uint32_t width, uint32_t height, uint32_t x, uint32_t y) {
+    // Read pixel data offset from BMP header
+    uint32_t data_offset = bmp_data[10] | (bmp_data[11] << 8) | (bmp_data[12] << 16) | (bmp_data[13] << 24);
+    uint8_t* pixel_data = bmp_data + data_offset;
+
+    // Calculate bytes per row (4bpp: two pixels per byte) and padding to 4-byte boundary
+    uint32_t row_bytes = (width + 1) / 2;
+    uint32_t padding = (4 - (row_bytes % 4)) % 4;
+    row_bytes += padding;
+
+    // Iterate rows top-to-bottom
+    for (uint32_t row = 0; row < height; row++) {
+        uint32_t src_row = height - 1 - row;
+        uint8_t* row_ptr = pixel_data + src_row * row_bytes;
+        for (uint32_t col = 0; col < width; col++) {
+            uint8_t byte = row_ptr[col / 2];
+            uint8_t pixel = (col & 1) ? (byte & 0x0F) : (byte >> 4);
+            draw_pixel(backbuf, x + col, y + row, pixel);
         }
     }
 }

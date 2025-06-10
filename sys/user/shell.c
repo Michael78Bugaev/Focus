@@ -1352,11 +1352,10 @@ void shell_execute(char *input)
                 return;
             }
 
-            if (startsWith(arg[0], "#"));
-            else
-            {
+            if (!startsWith(arg[0], "#")) {
                 kprintf("<(0c)>%s: command or executable file not found<(0f)>\n", arg[0]);
             }
+            return;
         }
     }
 }

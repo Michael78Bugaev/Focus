@@ -3,7 +3,7 @@
 #include <multiboot.h>
 
 // External font provided by user: 8x16 glyphs
-extern uint8_t font8x16[256][16];
+
 
 // Initialize VBE terminal using multiboot info
 void vbe_init(struct multiboot_info *mbi);

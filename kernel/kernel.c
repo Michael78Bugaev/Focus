@@ -11,8 +11,6 @@
  * Always open this file at codepage CP437!
 */
 
-
-
 void kentr(uint32_t magic, struct multiboot_info *mbi) {
     qemu_debug_printf("Kernel entry point\n");
     qemu_debug_printf("Multiboot magic: 0x%08x\n", magic);
@@ -22,25 +20,34 @@ void kentr(uint32_t magic, struct multiboot_info *mbi) {
     qemu_debug_printf("IDT initialized\n");
     init_pit();
     qemu_debug_printf("PIT initialized\n");
-    init_dmem(mbi);
+    init_dmem();
     vbe_init(mbi);
     //draw_pixel(fb, 0, 0, 0x0F);
     ata_init();
     atapi_init();
-    print_ram();
     shell_execute("fatmount");
     shell_execute("isomount 2");
-    //kprintf("Press any key to continue...\n");
-    //kgetch();
-    //kclear();
-    //kprintf("<(05)>FOCUS<(07)> Operating System v1.5 <(0f)>\n<(0a)>Copyright MIT v3.0 License<(0f)>\n");
-    //kprintf("Created by Michael Bugaev\n\n");
-    //kprintf("%c FCSASM Compiler\n", 0x1a);
-    //kprintf("%c FAT32 File System\n\n", 0x1a);
-    //kprintf("Project: <(0b)>https://github.com/Michael78Bugaev/Focus/tree/master<(0f)> \nWritten in C and Assembly. Enjoy!\n");
-
-    kprintf("Starting cdrom:/focus/init.fcs...\n");
+    int bmp;
+    uint8_t *bmp_data = malloc(219 * 87);
+    if (!bmp_data)
+    {
+        kprintf("Can't print logo. Error while allocating memory\n");
+    }
+    else
+    {
+        bmp = iso9660_read("cdrom:/focus/images/logo.bmp", bmp_data, 219 * 87);
+        if (bmp <= 0)
+        {
+            kprintf("Can't print logo. Error while reading file. sz: %d\n", bmp);
+        }
+        else {
+            //print_bmp16(bmp_data, 100, 42, 0, 0);
+        }
+    }
+    kprintf("Starting /focus/init.fcs...\n");
+    if (bmp > 0) print_bmp16(bmp_data, 219, 87, 800 - 219, 0);
     shell_execute_fsc("cdrom:/focus/init.fcs");
+    kprint("end of kernel\n");
     for (;;);
     //shell_execute("sh");
 }

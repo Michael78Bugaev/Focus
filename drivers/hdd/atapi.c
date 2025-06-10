@@ -59,7 +59,7 @@ void atapi_init() {
         uint8_t cl = inb(dev->io_base + 4); // Cylinder Low
         uint8_t ch = inb(dev->io_base + 5); // Cylinder High
 
-        kprintf("ATAPI #%d: sc=%02X sn=%02X cl=%02X ch=%02X\n", i, sc, sn, cl, ch);
+        //kprintf("ATAPI #%d: sc=%02X sn=%02X cl=%02X ch=%02X\n", i, sc, sn, cl, ch);
 
         // ATAPI сигнатура: 0x01 0x01 0x14 0xEB
         if (cl != 0x14 || ch != 0xEB) {
@@ -89,7 +89,7 @@ void atapi_init() {
         for (int j = 0; j < 256; j++) buffer[j] = inw(dev->io_base + 0);
 
         // kprintf для отладки
-        kprintf("IDENTIFY: %04X %04X %04X %04X\n", buffer[0], buffer[1], buffer[2], buffer[3]);
+        //kprintf("IDENTIFY: %04X %04X %04X %04X\n", buffer[0], buffer[1], buffer[2], buffer[3]);
 
         // 7. Если сигнатура совпала — считаем устройство ATAPI!
         dev->exists = 1;
@@ -103,7 +103,7 @@ void atapi_init() {
     // Диагностика
     for (int i = 0; i < 4; i++) {
         struct atapi_device* dev = atapi_get_device(i);
-        kprintf("ATAPI #%d: exists=%d, model=%s\n", i, dev->exists, dev->model);
+        if (dev->exists) kprintf("Found ATAPI device #%d\n", i);
     }
 }
 
@@ -118,7 +118,7 @@ int atapi_read_device(int devnum, uint32_t lba, uint16_t count, void* buffer) {
 
         // Ждать BSY=0
         int timeout = ATAPI_TIMEOUT;
-        kprintf("Waiting for BSY=0\n");
+        //kprintf("Waiting for BSY=0\n");
         while ((inb(io + 7) & 0x80) && --timeout > 0);
         if (timeout == 0) {kprintf("Timeout before PACKET\n"); return -4;}
 
@@ -133,7 +133,7 @@ int atapi_read_device(int devnum, uint32_t lba, uint16_t count, void* buffer) {
 
         // Ждать DRQ
         timeout = ATAPI_TIMEOUT;
-        kprintf("Waiting for DRQ\n");
+        //kprintf("Waiting for DRQ\n");
         while (!(inb(io + 7) & 0x08) && --timeout > 0);
         if (timeout == 0) {kprintf("Error -2 (no DRQ after PACKET)\n"); return -2;}
 
@@ -150,14 +150,14 @@ int atapi_read_device(int devnum, uint32_t lba, uint16_t count, void* buffer) {
                               1, 
                               0, 
                               0};
-        kprintf("Packet: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X\n", 
-        packet[0], packet[1], packet[2], packet[3], packet[4], packet[5], packet[6], packet[7], packet[8], packet[9], packet[10], packet[11]);
+        //kprintf("Packet: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X\n", 
+        //packet[0], packet[1], packet[2], packet[3], packet[4], packet[5], packet[6], packet[7], packet[8], packet[9], packet[10], packet[11]);
         outsw(io, packet, 6);
 
         // Ждать DRQ для данных
         timeout = ATAPI_TIMEOUT;
-        kprintf("Waiting for DRQ for data\n");
-        while (!(inb(io + 7) & 0x08) && --timeout > 0) { kprintf("timeout: %d\n", timeout); set_cursor_x(0); }
+        //kprintf("Waiting for DRQ for data\n");
+        while (!(inb(io + 7) & 0x08) && --timeout > 0); //{ //kprintf("timeout: %d\n", timeout); set_cursor_x(0); }
         if (timeout == 0) {kprintf("Error -3 (no DRQ for data)\n"); return -3;}
 
         // Чтение данных
@@ -165,7 +165,7 @@ int atapi_read_device(int devnum, uint32_t lba, uint16_t count, void* buffer) {
 
         // Ждать завершения (BSY=0)
         timeout = ATAPI_TIMEOUT;
-        kprintf("Waiting for BSY=0 after read\n");
+        //kprintf("Waiting for BSY=0 after read\n");
         while ((inb(io + 7) & 0x80) && --timeout > 0);
         if (timeout == 0) {kprintf("Timeout after read\n"); return -4;}
     }

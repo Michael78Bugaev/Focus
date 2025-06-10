@@ -4,34 +4,21 @@
 #include <string.h>
 #include <stdbool.h>
 #include <stddef.h>
-extern char end; // Defined by linker, end of bss
+static uint8_t dynamic_mem_area[DYNAMIC_MEM_TOTAL_SIZE];
 static dynamic_mem_node_t *dynamic_mem_start;
-static uint32_t total_ram;
-static uint32_t pool_ram;
-void init_dmem(struct multiboot_info* mbi) {
-    // Initialize dynamic memory pool from end of bss to top of RAM
-    uintptr_t heap_start = (uintptr_t)&end;
-    uintptr_t heap_end = 0x100000 + (uintptr_t)mbi->mem_upper * 1024;
-    uint32_t heap_bytes = (heap_end > heap_start) ? heap_end - heap_start : 0;
-    dynamic_mem_start = (dynamic_mem_node_t *)heap_start;
-    // First node: remaining size after node overhead
-    dynamic_mem_start->size = (heap_bytes > DYNAMIC_MEM_NODE_SIZE) ? heap_bytes - DYNAMIC_MEM_NODE_SIZE : 0;
+
+void init_dmem()
+{
+    dynamic_mem_start = (dynamic_mem_node_t *) dynamic_mem_area;
+    dynamic_mem_start->size = DYNAMIC_MEM_TOTAL_SIZE - DYNAMIC_MEM_NODE_SIZE;
     dynamic_mem_start->next = NULL_POINTER;
     dynamic_mem_start->prev = NULL_POINTER;
-    // Store system and pool sizes for later printing
-    total_ram = (mbi->mem_lower + mbi->mem_upper) / 1024;
-    pool_ram = dynamic_mem_start->size / (1024 * 1024);
+    kprintf("memgmt: %u MB\n", ((int)dynamic_mem_start->size / 1024) / 1024);
 }
-
-void print_ram()
-{
-    kprintf("memgmt: system %u MB, heap %u MB\n", total_ram, pool_ram);
-}
-
 void *find_memblock(dynamic_mem_node_t *dynamic_mem, size_t size) {
     // initialize the result pointer with NULL and an invalid block size
     dynamic_mem_node_t *best_mem_block = (dynamic_mem_node_t *) NULL_POINTER;
-    uint32_t best_mem_block_size = UINT32_MAX; // allow any block size
+    uint32_t best_mem_block_size = DYNAMIC_MEM_TOTAL_SIZE + 1;
 
     // start looking for the best (smallest unused) block at the beginning
     dynamic_mem_node_t *current_mem_block = dynamic_mem;
