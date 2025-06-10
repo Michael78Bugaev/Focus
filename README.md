@@ -1,10 +1,13 @@
-# FocusOS
-
 <div align="center">
+
+![Focus logo](https://github.com/Michael78Bugaev/Focus/blob/master/images/focus-logo.jpg?v=2)
+
+# Focus
+
+A modern 32-bit operating system written in C and Assembly, featuring a custom shell, FAT32 filesystem support, VBE 800x600 driver with double buffering and a built-in assembly compiler.
 
 ![FocusOS Screenshot 1](https://github.com/Michael78Bugaev/Focus/blob/master/images/focus1.png?v=2)
 
-A modern 32-bit operating system written in C and Assembly, featuring a custom shell, FAT32 filesystem support, and a built-in assembly compiler.
 
 ![FocusOS Screenshot 2](https://github.com/Michael78Bugaev/Focus/blob/master/images/focus2.png?v=2)
 
@@ -82,43 +85,6 @@ The system will automatically start in QEMU after building. To run manually:
 ```bash
 qemu-system-i386 -m 1500M -drive file=hda.img,format=raw,if=ide -cdrom focusos.iso -boot d -serial stdio
 ```
-
-## Shell Commands
-
-### File System Commands
-- `ls` - List files in current directory
-- `cd <path>` - Change directory
-- `cat <filename>` - Display file content
-- `edit <filename>` - Edit file
-- `touch <filename>` - Create empty file
-- `mkdir <dirname>` - Create directory
-- `rm <filename>` - Remove file or directory
-- `xxd <filename>` - Display hex dump
-
-### Disk Management
-- `disk [n]` - Select disk (0-3)
-- `list` - List available disks
-- `fatmount` - Mount FAT32 partition
-- `fatinfo` - Display FAT32 volume information
-- `fatmkfs` - Create FAT32 filesystem
-
-### ISO9660 Commands
-- `isomount <devnum>` - Mount ISO9660 volume
-- `isols` - List files in ISO9660 volume
-- `isocat <filename>` - Display ISO9660 file content
-- `isocpy [-r] <src> <dst>` - Copy from ISO9660 to FAT32
-
-### Development Tools
-- `fcsasm <src.asm> <dst.ex>` - Compile assembly to executable
-- `fcsasm -l <src.asm>` - List assembly labels
-
-### System Commands
-- `help` - Show available commands
-- `clear` - Clear screen
-- `reboot` - Reboot system
-- `shutdown` - Shut down system
-- `sleep [ms]` - Sleep for specified milliseconds
-- `echo [message]` - Print message
 
 ## License
 

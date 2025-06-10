@@ -24,5 +24,6 @@ SECTIONS
     .bss :
     {
         *(.bss .bss.*)
+        end = .;
     }
 }

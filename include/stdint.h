@@ -14,6 +14,9 @@
 #define true 1
 #endif
 
+#define UINT32_MAX 0xFFFFFFFF
+#define UINT64_MAX 0xFFFFFFFFFFFFFFFF
+
 /* stdint types */
 typedef unsigned char       uint8_t;
 typedef   signed char        int8_t;

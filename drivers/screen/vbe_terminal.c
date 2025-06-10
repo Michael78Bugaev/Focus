@@ -291,14 +291,25 @@ void kprintf(const char* format, ...) {
     arg++; // first arg
     while ((c = *format++) != 0) {
         if (c == '<' && *format == '(') {
-            format++;
-            char bg = *format++;
-            char fg = *format++;
-            if (*format == ')' && *(format+1) == '>') {
-                current_color = parse_color_code(bg, fg);
-                format += 2;
+            const char *f = format + 1;
+            if (strncmp(format, "(endl)>", 7) == 0) {
+                kputchar('\n', current_color);
+                format += 7; // skip "(endl)>"
                 continue;
+            } else if (format[1] && format[2] && format[3] && format[4] && format[5]) {
+                char bg = format[1];
+                char fg = format[2];
+                if (format[3] == ')' && format[4] == '>') {
+                    current_color = parse_color_code(bg, fg);
+                    format += 5; // skip "(BGFG)>"
+                    continue;
+                }
             }
+            // not a tag, print as text
+            kputchar('<', current_color);
+            kputchar('(', current_color);
+            format += 1; // move past '('
+            continue;
         }
         if (c != '%') {
             kputchar(c, current_color);

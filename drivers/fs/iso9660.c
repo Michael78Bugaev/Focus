@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
+#include <mem.h>
 
 #define ISO9660_SECTOR_SIZE 2048
 #define ISO9660_PVD_SECTOR 16
@@ -41,32 +42,67 @@ int iso9660_mount() {
     return iso9660_mount_dev(iso9660_atapi_devnum);
 }
 
-// Поиск файла только в корневом каталоге (упрощённо)
-int iso9660_find(const char* path, uint32_t* lba, uint32_t* size) {
+// Helper: search for a name within a directory (dir_lba, dir_size)
+static int iso9660_find_in_dir(const char* name, uint32_t* out_lba, uint32_t* out_size, uint32_t dir_lba, uint32_t dir_size) {
+    uint32_t sectors = (dir_size + ISO9660_SECTOR_SIZE - 1) / ISO9660_SECTOR_SIZE;
     uint8_t* sector = malloc(ISO9660_SECTOR_SIZE);
-    if (!sector) {
-        kprintf("Error allocating memory\n");
-        return -1;
-    }
-    kprintf("Root dir LBA: %d, Size: %d\n", g_root_dir_lba, g_root_dir_size);
-    if (atapi_read_device(iso9660_atapi_devnum, g_root_dir_lba, 1, sector) != 0) return -1;
-    kprintf("Sector: %d\n", sector[0]);
-    size_t offset = 0;
-    while (offset < ISO9660_SECTOR_SIZE) {
-        uint8_t len = sector[offset];
-        if (len == 0) break;
-        uint8_t name_len = sector[offset+32];
-        char* name = (char*)&sector[offset+33];
-        if (iso9660_namecmp(name, name_len, path)) {
-            *lba = sector[offset+2] | (sector[offset+3]<<8) | (sector[offset+4]<<16) | (sector[offset+5]<<24);
-            *size = sector[offset+10] | (sector[offset+11]<<8) | (sector[offset+12]<<16) | (sector[offset+13]<<24);
-            return 0;
+    if (!sector) return -1;
+    for (uint32_t i = 0; i < sectors; i++) {
+        if (atapi_read_device(iso9660_atapi_devnum, dir_lba + i, 1, sector) != 0) continue;
+        size_t offset = 0;
+        while (offset < ISO9660_SECTOR_SIZE) {
+            uint8_t len = sector[offset];
+            if (len == 0) break;
+            uint8_t name_len = sector[offset+32];
+            char* rec_name = (char*)&sector[offset+33];
+            if (iso9660_namecmp(rec_name, name_len, name)) {
+                *out_lba = sector[offset+2] | (sector[offset+3]<<8) | (sector[offset+4]<<16) | (sector[offset+5]<<24);
+                *out_size = sector[offset+10] | (sector[offset+11]<<8) | (sector[offset+12]<<16) | (sector[offset+13]<<24);
+                mfree(sector);
+                return 0;
+            }
+            offset += len;
         }
-        offset += len;
     }
-    kprintf("File not found\n");
     mfree(sector);
-    return -2;
+    return -1;
+}
+
+// Enhanced iso9660_find: support nested paths using '/'
+int iso9660_find(const char* path, uint32_t* lba, uint32_t* size) {
+    if (!path || !lba || !size) return -1;
+    char* path_copy = malloc(strlen(path) + 1);
+    if (!path_copy) return -1;
+    strcpy(path_copy, path);
+    // Normalize path: uppercase letters and convert backslashes to slashes
+    for (char* p = path_copy; *p; ++p) {
+        if (*p >= 'a' && *p <= 'z') *p = *p - ('a' - 'A');
+        if (*p == '\\') *p = '/';
+    }
+    // Strip CDROM:/ prefix if present
+    if (strncmp(path_copy, "CDROM:/", 7) == 0) {
+        memmove(path_copy, path_copy + 7, strlen(path_copy + 7) + 1);
+    }
+    char* token = strtok(path_copy, "/");
+    uint32_t curr_lba = g_root_dir_lba;
+    uint32_t curr_size = g_root_dir_size;
+    uint32_t ent_lba = 0;
+    uint32_t ent_size = 0;
+    while (token) {
+        if (iso9660_find_in_dir(token, &ent_lba, &ent_size, curr_lba, curr_size) != 0) {
+            mfree(path_copy);
+            return -2;
+        }
+        token = strtok(NULL, "/");
+        if (token) {
+            curr_lba = ent_lba;
+            curr_size = ent_size;
+        }
+    }
+    mfree(path_copy);
+    *lba = ent_lba;
+    *size = ent_size;
+    return 0;
 }
 
 // Чтение файла по пути (только из корня)

@@ -22,34 +22,27 @@ void kentr(uint32_t magic, struct multiboot_info *mbi) {
     qemu_debug_printf("IDT initialized\n");
     init_pit();
     qemu_debug_printf("PIT initialized\n");
-    init_dmem();
+    init_dmem(mbi);
     vbe_init(mbi);
     //draw_pixel(fb, 0, 0, 0x0F);
     ata_init();
     atapi_init();
+    print_ram();
     shell_execute("fatmount");
     shell_execute("isomount 2");
-    kprintf("Press any key to continue...\n");
-    kgetch();
-    kclear();
-    kprintf("<(05)>FOCUS<(07)> Operating System v1.5 <(0f)>\n<(0a)>Copyright MIT v3.0 License<(0f)>\n");
-    kprintf("Created by Michael Bugaev\n\n");
-    kprintf("%c FCSASM Compiler\n", 0x1a);
-    kprintf("%c FAT32 File System\n\n", 0x1a);
-    kprintf("Project: <(0b)>https://github.com/Michael78Bugaev/Focus/tree/master<(0f)> \nWritten in C and Assembly. Enjoy!\n");
+    //kprintf("Press any key to continue...\n");
+    //kgetch();
+    //kclear();
+    //kprintf("<(05)>FOCUS<(07)> Operating System v1.5 <(0f)>\n<(0a)>Copyright MIT v3.0 License<(0f)>\n");
+    //kprintf("Created by Michael Bugaev\n\n");
+    //kprintf("%c FCSASM Compiler\n", 0x1a);
+    //kprintf("%c FAT32 File System\n\n", 0x1a);
+    //kprintf("Project: <(0b)>https://github.com/Michael78Bugaev/Focus/tree/master<(0f)> \nWritten in C and Assembly. Enjoy!\n");
 
-    char *input = malloc(1024);
-    if (!&input)
-    {
-        kprintf("Error allocating memory\n");
-        return;
-    }
-    for (;;)
-    {
-        print_prompt();
-        get_string(input);
-        shell_execute(input);
-    }
+    kprintf("Starting cdrom:/focus/init.fcs...\n");
+    shell_execute_fsc("cdrom:/focus/init.fcs");
+    for (;;);
+    //shell_execute("sh");
 }
 
 void print_prompt() {

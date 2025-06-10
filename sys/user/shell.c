@@ -22,6 +22,7 @@ uint8_t hex_to_int(char c);
 uint32_t find_free_cluster(uint8_t drive);
 
 extern int build_path(uint32_t cluster, char path[][9], int max_depth);
+static int ensure_fat32_path(uint8_t disk, const char* path, uint32_t* out_dir_cluster, char* out_filename);
 
 // Local function to convert character to uppercase
 static char my_toupper(char c) {
@@ -74,50 +75,71 @@ int build_path(uint32_t cluster, char path[][9], int max_depth) {
     return depth;
 }
 
-// Выполнить .fsc файл как скрипт
+// Выполнить .fsc файл как скрипт (поддержка cdrom:/ и абсолютных путей FAT32)
 void shell_execute_fsc(const char* fname) {
+    // ISO9660 script
+    if (strncmp(fname, "cdrom:/", 7) == 0) {
+        const char* iso_path = fname + 7;
+        char* buf = malloc(4096);
+        if (!buf) { kprintf("<(04)>Error allocating memory!<(0f)>\n"); return; }
+        int sz = iso9660_read(iso_path, buf, 4095);
+        if (sz <= 0) { kprintf("<(04)>Cannot read script: %s. sz: %d<(0f)>\n", fname, sz); mfree(buf); return; }
+        buf[sz] = 0;
+        char* line = strtok(buf, "\n");
+        while (line) {
+            while (*line == ' ' || *line == '\t') line++;
+            if (*line && *line != '#') shell_execute(line);
+            line = strtok(NULL, "\n");
+        }
+        mfree(buf);
+        return;
+    }
+    // FAT32 script (relative or absolute)
+    uint32_t dir_cluster = current_dir_cluster;
+    char filename_buf[13];
+    if (fname[1] == ':' && (fname[2] == '\\' || fname[2] == '/')) {
+        if (ensure_fat32_path(current_disk, fname, &dir_cluster, filename_buf) != 0) {
+            kprintf("Cannot read script: %s\n", fname);
+            return;
+        }
+    } else {
+        strncpy(filename_buf, fname, 12);
+        filename_buf[12] = 0;
+    }
     fat32_dir_entry_t entries[32];
-    int n = fat32_read_dir(current_disk, current_dir_cluster, entries, 32);
+    int n = fat32_read_dir(current_disk, dir_cluster, entries, 32);
     char fatname[12];
     memset(fatname, ' ', 11);
     fatname[11] = 0;
-    int clen = strlen(fname);
+    int clen = strlen(filename_buf);
     int dot = -1;
-    for (int i = 0; i < clen; i++) if (fname[i] == '.') { dot = i; break; }
+    for (int i = 0; i < clen; i++) if (filename_buf[i] == '.') { dot = i; break; }
     if (dot == -1) {
-        for (int i = 0; i < clen && i < 8; i++) fatname[i] = toupper(fname[i]);
+        for (int i = 0; i < clen && i < 8; i++) fatname[i] = toupper(filename_buf[i]);
     } else {
-        for (int i = 0; i < dot && i < 8; i++) fatname[i] = toupper(fname[i]);
-        for (int i = dot + 1, j = 8; i < clen && j < 11; i++, j++) fatname[j] = toupper(fname[i]);
+        for (int i = 0; i < dot && i < 8; i++) fatname[i] = toupper(filename_buf[i]);
+        for (int i = dot + 1, j = 8; i < clen && j < 11; i++, j++) fatname[j] = toupper(filename_buf[i]);
     }
-    int found = 0;
-    uint32_t cl = 0;
+    int found = 0; uint32_t cl = 0;
     for (int i = 0; i < n; i++) {
         if (strncmp(entries[i].name, fatname, 11) == 0) {
             cl = ((uint32_t)entries[i].first_cluster_high << 16) | entries[i].first_cluster_low;
-            found = 1;
-            break;
+            found = 1; break;
         }
     }
-    if (!found) {
-        kprintf("Cannot read script: %s\n", fname);
-        return;
-    }
-    char buffer[4096];
+    if (!found) { kprintf("Cannot read script: %s\n", fname); return; }
+    char *buffer = malloc(4096);
+    if (!buffer) { kprintf("Error allocating memory\n"); return; }
     int size = fat32_read_file(current_disk, cl, (uint8_t*)buffer, 4095);
-    if (size <= 0) {
-        kprintf("Cannot read script: %s\n", fname);
-        return;
-    }
+    if (size <= 0) { kprintf("Cannot read script: %s\n", fname); mfree(buffer); return; }
     buffer[size] = 0;
     char* line = strtok(buffer, "\n");
     while (line) {
         while (*line == ' ' || *line == '\t') line++;
-        if (*line && *line != '#') {
-            shell_execute(line);
-        }
+        if (*line && *line != '#') shell_execute(line);
         line = strtok(NULL, "\n");
     }
+    mfree(buffer);
 }
 
 void shell_execute(char *input)
@@ -181,6 +203,10 @@ void shell_execute(char *input)
             bootsec[511] = 0xAA;
 
             return;
+        }
+        else if (strcmp(arg[0], "halt") == 0)
+        {
+            for (;;);
         }
         else if (strcmp(arg[0], "setup") == 0)
         {
@@ -767,7 +793,9 @@ void shell_execute(char *input)
                         if ((33 + name_len) % 2 != 0) entry_len++;
                         offset += len;
                     }
-                } else if (strcmp(subarg[0], "cat") == 0) {
+                } 
+                else if (strcmp(subarg[0], "clear") == 0) { kclear(); continue; }
+                else if (strcmp(subarg[0], "cat") == 0) {
                     if (sub_count < 2) {
                         kprint("Usage: cat <filename>\n");
                         continue;
@@ -1102,9 +1130,24 @@ void shell_execute(char *input)
         }
         else if (strcmp(arg[0], "sh") == 0)
         {
-            while (1)
+            if (count < 2)
             {
-                
+                char *input = malloc(1024);
+                if (!&input)
+                {
+                    kprintf("Error allocating memory\n");
+                    return;
+                }
+                for (;;)
+                {
+                    print_prompt();
+                    get_string(input);
+                    shell_execute(input);
+                }
+                return;
+            }
+            else{
+                shell_execute_fsc(arg[1]);
             }
             return;
         }
