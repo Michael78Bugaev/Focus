@@ -1,6 +1,6 @@
 <div align="center">
 
-![Focus logo](https://github.com/Michael78Bugaev/Focus/blob/master/images/focus-logo.jpg?v=2)
+![Focus logo](https://github.com/Michael78Bugaev/Focus/blob/master/images/focus-logo.png?v=2)
 
 # Focus
 
