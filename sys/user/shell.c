@@ -413,13 +413,18 @@ void shell_execute(char *input)
         } 
         else if (strcmp(arg[0], "ls") == 0)
         {
-            fat32_dir_entry_t entries[32];
-            int n = fat32_read_dir(current_disk, current_dir_cluster, entries, 32);
-            if (n < 0) {
-                kprint("Error reading directory\n");
+            fat32_dir_entry_t *entries = malloc(32 * sizeof(fat32_dir_entry_t));
+            if (!entries) {
+                kprintf("<(0c)>Error allocating memory<(0f)>\n");
                 return;
             }
-            
+            int n = fat32_read_dir(current_disk, current_dir_cluster, entries, 32);
+            if (n < 0) {
+                kprint("<(0c)>Error reading directory<(0f)>\n");
+                mfree(entries);
+                return;
+            }
+            mfree(entries);
             // Сначала выводим директории
             for (int i = 0; i < n; i++) {
                 if (entries[i].name[0] == 0xE5 || entries[i].name[0] == 0) continue;
@@ -738,6 +743,7 @@ void shell_execute(char *input)
             kprintf("Type 'help' for more information.\n");
             kprintf("Type 'exit' or 'quit' to exit.\n\n");
             int devnum = iso9660_atapi_devnum;
+            char iso_current_dir[256];
             kprintf("Current ATAPI CD-ROM: <(0e)>#%d<(0f)>\n\n", devnum);
             uint8_t *cmd = malloc(1024);
             if (!cmd) {
@@ -765,10 +771,15 @@ void shell_execute(char *input)
                 } 
                 if (strcmp(subarg[0], "quit") == 0) break;
                 else if (strcmp(subarg[0], "ls") == 0) {
-                    uint8_t sector[2048];
+                    uint8_t *sector = malloc(2048);
+                    if (!sector) {
+                        kprintf("<(0c)>Error allocating memory<(0f)>\n\n");
+                        continue;
+                    }
                     extern uint32_t g_root_dir_lba, g_root_dir_size;
                     if (atapi_read_device(iso9660_atapi_devnum, g_root_dir_lba, 1, sector) != 0) {
-                        kprintf("<(04)>Error reading ISO root directory<(0f)>\n\n");
+                        kprintf("<(0c)>Error reading ISO root directory<(0f)>\n\n");
+                        mfree(sector);
                         continue;
                     }
                     kprintf("ISO9660 root directory:\n");
@@ -794,6 +805,10 @@ void shell_execute(char *input)
                         offset += len;
                     }
                 } 
+                else if (strcmp(subarg[0], "pwd") == 0)
+                {
+
+                }
                 else if (strcmp(subarg[0], "clear") == 0) { kclear(); continue; }
                 else if (strcmp(subarg[0], "cat") == 0) {
                     if (sub_count < 2) {
@@ -842,7 +857,24 @@ void shell_execute(char *input)
             }
             mfree(cmd);
             return;
-        } else if (strcmp(arg[0], "mkdir") == 0)
+        } 
+        else if (strcmp(arg[0], "logo") == 0) {
+            uint8_t *bmp_data = malloc(219 * 87);
+            if (!bmp_data) {
+                kprintf("<(04)>Error allocating memory<(0f)>\n\n");
+                return;
+            }
+            int bmp = iso9660_read("cdrom:/focus/images/logo.bmp", bmp_data, 219 * 87);
+            if (bmp <= 0) {
+                kprintf("<(04)>Error reading logo.bmp<(0f)>\n\n");
+                mfree(bmp_data);
+                return;
+            }
+            print_bmp16(bmp_data, 219, 87, 800 - 230, 5);
+            mfree(bmp_data);
+            return;
+        }
+        else if (strcmp(arg[0], "mkdir") == 0)
         {
             if (count < 2) {
                 kprint("Usage: mkdir [DIRNAME]\n");
@@ -997,6 +1029,7 @@ void shell_execute(char *input)
                 parent_cluster = tmp_cl;
             }
             // Read parent directory
+            qemu_debug_printf("parent_cluster: %u\n", parent_cluster);
             int n = fat32_read_dir(current_disk, parent_cluster, entries, 32);
             int found = 0;
             for (int i = 0; i < n; i++) {
@@ -1073,7 +1106,7 @@ void shell_execute(char *input)
                 kprint("Usage: edit <filename>\n");
                 return;
             }
-            editor_main(arg[1]);
+            //editor_main(arg[1], current_disk);
             return;
         }
         else if (strcmp(arg[0], "reboot") == 0)
@@ -1320,37 +1353,37 @@ void shell_execute(char *input)
         }
         else if (strcmp(arg[0], "snake") == 0)
         {
-            snake_main();
+            //snake_main();
             return;
         }
         else
         {
             // Попытка запустить любой файл как бинарный
-            fat32_dir_entry_t entries[32];
-            int n = fat32_read_dir(current_disk, current_dir_cluster, entries, 32);
-            char fatname[12];
-            memset(fatname, ' ', 11);
-            fatname[11] = 0;
-            int clen = strlen(arg[0]);
-            int dot = -1;
-            for (int i = 0; i < clen; i++) if (arg[0][i] == '.') { dot = i; break; }
-            if (dot == -1) {
-                for (int i = 0; i < clen && i < 8; i++) fatname[i] = toupper(arg[0][i]);
-            } else {
-                for (int i = 0; i < dot && i < 8; i++) fatname[i] = toupper(arg[0][i]);
-                for (int i = dot + 1, j = 8; i < clen && j < 11; i++, j++) fatname[j] = toupper(arg[0][i]);
-            }
-            int found = 0;
-            for (int i = 0; i < n; i++) {
-                if (strncmp(entries[i].name, fatname, 11) == 0 && (entries[i].attr & 0x10) == 0) {
-                    found = 1;
-                    break;
-                }
-            }
-            if (found) {
-                load_and_run_binary(arg[0], current_disk, current_dir_cluster);
-                return;
-            }
+            // fat32_dir_entry_t entries[32];
+            // int n = fat32_read_dir(current_disk, current_dir_cluster, entries, 32);
+            // char fatname[12];
+            // memset(fatname, ' ', 11);
+            // fatname[11] = 0;
+            // int clen = strlen(arg[0]);
+            // int dot = -1;
+            // for (int i = 0; i < clen; i++) if (arg[0][i] == '.') { dot = i; break; }
+            // if (dot == -1) {
+            //     for (int i = 0; i < clen && i < 8; i++) fatname[i] = toupper(arg[0][i]);
+            // } else {
+            //     for (int i = 0; i < dot && i < 8; i++) fatname[i] = toupper(arg[0][i]);
+            //     for (int i = dot + 1, j = 8; i < clen && j < 11; i++, j++) fatname[j] = toupper(arg[0][i]);
+            // }
+            // int found = 0;
+            // for (int i = 0; i < n; i++) {
+            //     if (strncmp(entries[i].name, fatname, 11) == 0 && (entries[i].attr & 0x10) == 0) {
+            //         found = 1;
+            //         break;
+            //     }
+            // }
+            // if (found) {
+            //     load_and_run_binary(arg[0], current_disk, current_dir_cluster);
+            //     return;
+            // }
 
             if (!startsWith(arg[0], "#")) {
                 kprintf("<(0c)>%s: command or executable file not found<(0f)>\n", arg[0]);
@@ -1610,6 +1643,7 @@ static int isocpy_file(const char* src, const char* dst) {
     char* buf = malloc(4096);
     if (!buf) {
         kprintf("<(04)>Error allocating memory<(0f)>\n");
+        mfree(buf);
         return -1;
     }
     int sz = iso9660_read(src, buf, sizeof(buf));
@@ -1623,6 +1657,7 @@ static int isocpy_file(const char* src, const char* dst) {
     char fatname[13];
     if (dst[1] == ':' && (dst[2] == '\\' || dst[2] == '/')) {
         // Абсолютный путь
+        qemu_debug_printf("dst: %s\n", dst);
         if (ensure_fat32_path(current_disk, dst, &dir_cluster, fatname) != 0) {
             kprintf("<(04)>Error creating path %s<(0f)>\n", dst);
             mfree(buf);
@@ -1645,13 +1680,16 @@ static int isocpy_file(const char* src, const char* dst) {
         for (int i = dot + 1, j = 8; i < clen && j < 11; i++, j++) name[j] = toupper(fatname[i]);
     }
     // Найти свободный кластер
+    qemu_debug_printf("find_free_cluster\n");
     uint32_t cl = find_free_cluster(current_disk);
     if (cl == 0) {
         kprintf("<(04)>No free cluster<(0f)>\n");
         mfree(buf);
         return -1;
     }
+    qemu_debug_printf("fat32_write_file\n");
     int res = fat32_write_file(current_disk, cl, (uint8_t*)buf, sz);
+    qemu_debug_printf("fat32_write_file done\n");
     // Записать файл
     if (res != sz) {
         kprintf("<(04)>Error writing to FAT32. Code: %d<(0f)>\n", res);
@@ -1659,12 +1697,20 @@ static int isocpy_file(const char* src, const char* dst) {
         return -1;
     }
     // Добавить запись в каталог
-    uint8_t sector[512];
+    qemu_debug_printf("add to dir\n");
+    uint8_t *sector = malloc(512);
+    if (!sector) {
+        kprintf("<(04)>Error allocating memory<(0f)>\n");
+        mfree(buf);
+        return -1;
+    }
     uint32_t lba = fat32_cluster_to_lba(dir_cluster);
     if (ata_read_sector(current_disk, lba, sector) != 0) {
         kprintf("<(04)>Error reading dir<(0f)>\n");
+        mfree(sector);
         return -1;
     }
+    qemu_debug_printf("add to dir done\n");
     for (int off = 0; off < 512; off += 32) {
         if (sector[off] == 0x00 || sector[off] == 0xE5) {
             memset(&sector[off], ' ', 11);
@@ -1673,11 +1719,16 @@ static int isocpy_file(const char* src, const char* dst) {
             *(uint16_t*)(&sector[off + 20]) = (uint16_t)((cl >> 16) & 0xFFFF); // high
             *(uint16_t*)(&sector[off + 26]) = (uint16_t)(cl & 0xFFFF); // low
             *(uint32_t*)(&sector[off + 28]) = sz;
+            qemu_debug_printf("write to disk: lba: %d sector: %d off: %d\n", lba, sector, off);
             if (ata_write_sector(current_disk, lba, sector) != 0) {
                 kprintf("<(04)>Error writing dir<(0f)>\n");
+                mfree(sector);
                 return -1;
             }
             kprintf("<(0a)>Copied %s -> %s (%d bytes)<(0f)>\n", src, dst, sz);
+            mfree(sector);
+            mfree(buf);
+
             return 0;
         }
     }

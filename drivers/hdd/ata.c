@@ -211,31 +211,31 @@ int ata_read_sector(uint8_t drive, uint32_t lba, uint8_t* buffer) {
 // Запись сектора
 int ata_write_sector(uint8_t drive, uint32_t lba, uint8_t* buffer) {
     if (drive >= 4 || !drives[drive].present) return -1;
-    
     uint16_t base = (drive < 2) ? ATA_PRIMARY_BASE : ATA_SECONDARY_BASE;
-    drive = drive % 2;
-    
-    ata_select_drive(base, drive);
-    
-    // Устанавливаем параметры записи
+    uint8_t head = drive % 2;
+    ata_select_drive(base, head);
+    // Set LBA and sector count
     outb(base + ATA_SECTOR_COUNT, 1);
     outb(base + ATA_SECTOR_NUM, lba & 0xFF);
     outb(base + ATA_CYL_LOW, (lba >> 8) & 0xFF);
     outb(base + ATA_CYL_HIGH, (lba >> 16) & 0xFF);
-    outb(base + ATA_DRIVE, 0xE0 | (drive << 4) | ((lba >> 24) & 0x0F));
-    
-    // Отправляем команду записи
+    outb(base + ATA_DRIVE, 0xE0 | (head << 4) | ((lba >> 24) & 0x0F));
+    // Send WRITE command
     outb(base + ATA_COMMAND, ATA_CMD_WRITE);
-    ata_wait(base);
-    
-    if (ata_check_error(base)) return -1;
-    
-    // Записываем данные через 16-битные слова
+    // Wait for BSY=0 and DRQ=1 (ready to receive data) with timeout
+    uint8_t status;
+    uint32_t timeout = 1000000;
+    do { status = inb(base + ATA_STATUS); } while (((status & ATA_SR_BSY) || !(status & ATA_SR_DRQ)) && --timeout);
+    if (timeout == 0 || (status & ATA_SR_ERR)) return -1;
+    // Write 256 words (512 bytes)
     for (int i = 0; i < 256; i++) {
         uint16_t data = buffer[i*2] | (buffer[i*2+1] << 8);
         outw(base + ATA_DATA, data);
     }
-    
+    // Wait for BSY=0 (command complete) with timeout
+    timeout = 1000000;
+    do { status = inb(base + ATA_STATUS); } while ((status & ATA_SR_BSY) && --timeout);
+    if (timeout == 0 || (status & ATA_SR_ERR)) return -1;
     return 0;
 }
 

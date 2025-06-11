@@ -15,6 +15,7 @@ void kentr(uint32_t magic, struct multiboot_info *mbi) {
     qemu_debug_printf("Kernel entry point\n");
     qemu_debug_printf("Multiboot magic: 0x%08x\n", magic);
     qemu_debug_printf("Multiboot address: 0x%08x\n", mbi->framebuffer_addr);
+    qemu_debug_printf("VBE width: %d, height: %d\n", mbi->framebuffer_width, mbi->framebuffer_height);
     init_gdt();
     init_idt();
     qemu_debug_printf("IDT initialized\n");
@@ -45,9 +46,11 @@ void kentr(uint32_t magic, struct multiboot_info *mbi) {
         }
     }
     kprintf("Starting /focus/init.fcs...\n");
-    if (bmp > 0) print_bmp16(bmp_data, 219, 87, 800 - 219, 0);
+    if (bmp > 0) print_bmp16(bmp_data, 219, 87, 800 - 230, 5);
+    mfree(bmp_data);
     shell_execute_fsc("cdrom:/focus/init.fcs");
     kprint("end of kernel\n");
+    if (bmp > 0) print_bmp16(bmp_data, 219, 87, 800 - 230, 5);
     for (;;);
     //shell_execute("sh");
 }

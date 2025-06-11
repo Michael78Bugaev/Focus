@@ -2,7 +2,7 @@
 CC = gcc
 AS = nasm
 LD = ld
-CFLAGS=-DUSE_VBE -c -g -fcommon -Werror -Wimplicit -w -I include/ -ffreestanding -m32 -fno-inline-functions -O2 -fno-omit-frame-pointer
+CFLAGS=-DUSE_VBE -c -g -fcommon -Werror -Wimplicit -w -I include/ -ffreestanding -m32 -fno-inline-functions -O3 -fno-omit-frame-pointer
 CPPFLAGS=-c -g -fcommon -Werror -w -I ./include/ -ffreestanding -m32 -fno-inline-functions -O2 -fno-omit-frame-pointer
 ASMFLAGS=-f elf32
 LDFLAGS= -T link.ld --allow-multiple-definition -m elf_i386
