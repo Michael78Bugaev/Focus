@@ -6,6 +6,7 @@
 #include <fat32.h>
 #include <paging.h>
 #include <vbe_terminal.h>
+#include <apic.h>
 /*
  * WARNING:
  * Always open this file at codepage CP437!
@@ -19,8 +20,11 @@ void kentr(uint32_t magic, struct multiboot_info *mbi) {
     init_gdt();
     init_idt();
     qemu_debug_printf("IDT initialized\n");
-    init_pit();
-    qemu_debug_printf("PIT initialized\n");
+    // Initialize local APIC and APIC timer instead of PIT
+    apic_init();
+    // Start APIC timer: period value to generate ~1000 ticks per second (calibrate as needed)
+    apic_timer_init(1000000, APIC_TIMER_MODE_PERIODIC, APIC_TIMER_VECTOR);
+    qemu_debug_printf("APIC timer initialized\n");
     init_dmem();
     vbe_init(mbi);
     //draw_pixel(fb, 0, 0, 0x0F);
@@ -46,11 +50,12 @@ void kentr(uint32_t magic, struct multiboot_info *mbi) {
         }
     }
     kprintf("Starting /focus/init.fcs...\n");
+    //vbe_swap();
+    shell_execute_fsc("cdrom:/focus/init.fcs");
     if (bmp > 0) print_bmp16(bmp_data, 219, 87, 800 - 230, 5);
     mfree(bmp_data);
-    shell_execute_fsc("cdrom:/focus/init.fcs");
-    kprint("end of kernel\n");
-    if (bmp > 0) print_bmp16(bmp_data, 219, 87, 800 - 230, 5);
+    shell_execute("sh");
+    //if (bmp > 0) print_bmp16(bmp_data, 219, 87, 800 - 230, 5);
     for (;;);
     //shell_execute("sh");
 }

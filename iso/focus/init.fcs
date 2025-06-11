@@ -6,5 +6,5 @@ echo Created by Michael Bugaev<(endl)>
 echo - FCSASM Compiler
 echo - FAT32 File System<(endl)>
 echo Project: <(0b)>https://github.com/Michael78Bugaev/Focus/tree/master<(0f)> <(endl)>Written in C and Assembly. Enjoy!
-sh
-echo End of init.fsc
+#sh
+#echo End of init.fsc

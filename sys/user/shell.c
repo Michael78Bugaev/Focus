@@ -192,26 +192,9 @@ void shell_execute(char *input)
             kclear();
             return;
         }
-        else if (strcmp(arg[0], "bootsec") == 0)
-        {
-            uint8_t bootsec[512];
-            for (int i = 0; i < 512; i++)
-            {
-                bootsec[i] = 0;
-            }
-            bootsec[510] = 0x55;
-            bootsec[511] = 0xAA;
-
-            return;
-        }
         else if (strcmp(arg[0], "halt") == 0)
         {
             for (;;);
-        }
-        else if (strcmp(arg[0], "setup") == 0)
-        {
-            kclear_color(0x01);
-            return;
         }
         else if (strcmp(arg[0], "disk") == 0)
         {
@@ -416,15 +399,18 @@ void shell_execute(char *input)
             fat32_dir_entry_t *entries = malloc(32 * sizeof(fat32_dir_entry_t));
             if (!entries) {
                 kprintf("<(0c)>Error allocating memory<(0f)>\n");
+                qemu_debug_printf("Error allocating memory\n");
                 return;
             }
             int n = fat32_read_dir(current_disk, current_dir_cluster, entries, 32);
             if (n < 0) {
                 kprint("<(0c)>Error reading directory<(0f)>\n");
                 mfree(entries);
+                qemu_debug_printf("Error reading directory\n");
                 return;
             }
             mfree(entries);
+            qemu_debug_printf("n: %d\n", n);
             // Сначала выводим директории
             for (int i = 0; i < n; i++) {
                 if (entries[i].name[0] == 0xE5 || entries[i].name[0] == 0) continue;
@@ -461,11 +447,20 @@ void shell_execute(char *input)
                     if (name[0] == 0) continue; // не выводим пустые имена
                     
                     // Считаем количество записей в директории
-                    fat32_dir_entry_t subentries[32];
+                    fat32_dir_entry_t *subentries = malloc(32 * sizeof(fat32_dir_entry_t));
+                    if (!subentries) {
+                        kprint("<(0c)>Error allocating memory for fat struct entries<(0f)>\n");
+                        return;
+                    }
                     int subn = fat32_read_dir(current_disk, 
                         ((uint32_t)entries[i].first_cluster_high << 16) | entries[i].first_cluster_low, 
                         subentries, 32);
-                    if (subn < 0) subn = 0;
+                    if (subn < 0) {
+                        kprint("<(0c)>Error reading directory<(0f)>\n");
+                        mfree(subentries);
+                        return;
+                    }
+                    mfree(subentries);
                     
                     kprintf(" <DIR>  %s (%d entries)\n", name, subn);
                             }
@@ -522,13 +517,18 @@ void shell_execute(char *input)
         else if (strcmp(arg[0], "cat") == 0)
         {
             if (count < 2) {
-                kprint("Usage: cat [FILENAME]\n");
+                kprint("<(0c)>Usage: cat [FILENAME]<(0f)>\n");
                 return;
             }
-            fat32_dir_entry_t entries[32];
+            fat32_dir_entry_t *entries = malloc(32 * sizeof(fat32_dir_entry_t));
+            if (!entries) {
+                kprint("<(0c)>Error allocating memory for fat struct entries<(0f)>\n");
+                return;
+            }
             int n = fat32_read_dir(current_disk, current_dir_cluster, entries, 32);
             if (n < 0) {
-                kprint("Error read directory\n");
+                kprint("<(0c)>Error read directory<(0f)>\n");
+                mfree(entries);
                 return;
             }
             char *filename = arg[1];
@@ -555,10 +555,12 @@ void shell_execute(char *input)
                         kputchar(buf[b], 0x07);
                     }
                     kprint("\n");
+                    mfree(entries);
                     return;
                 }
             }
-            kprint("File not found\n");
+            kprint("<(0c)>cat: %s: File not found<(0f)>\n", arg[1]);
+            mfree(entries);
             return;
         }
         else if (strcmp(arg[0], "fatmkfs") == 0)
@@ -659,13 +661,18 @@ void shell_execute(char *input)
         else if (strcmp(arg[0], "touch") == 0)
         {
             if (count < 2) {
-                kprint("Usage: touch [FILENAME]\n");
+                kprint("<(0c)>Usage: touch [FILENAME]<(0f)>\n");
                 return;
             }
-            fat32_dir_entry_t entries[32];
+            fat32_dir_entry_t *entries = malloc(32 * sizeof(fat32_dir_entry_t));
+            if (!entries) {
+                kprint("<(0c)>Error allocating memory for fat struct entries<(0f)>\n");
+                return;
+            }
             int n = fat32_read_dir(current_disk, current_dir_cluster, entries, 32);
             if (n < 0 || n >= 32) {
-                kprint("Directory full or error\n");
+                kprint("<(0c)>Directory full or error<(0f)>\n");
+                mfree(entries);
                 return;
             }
             // File name (8.3, without dot)
@@ -681,7 +688,8 @@ void shell_execute(char *input)
             uint8_t sector[512];
             uint32_t lba = fat32_cluster_to_lba(current_dir_cluster);
             if (ata_read_sector(current_disk, lba, sector) != 0) {
-                kprint("Error reading dir\n");
+                kprint("<(0c)>Error reading dir<(0f)>\n");
+                mfree(entries);
                 return;
             }
             for (int off = 0; off < 512; off += 32) {
@@ -704,19 +712,22 @@ void shell_execute(char *input)
                     // --- Выделяем свободный кластер и записываем его ---
                     uint32_t cl = find_free_cluster(current_disk);
                     if (cl == 0) {
-                        kprint("No free cluster\n");
+                        kprint("<(0c)>No free cluster<(0f)>\n");
+                        mfree(entries);
                         return;
                     }
                     uint32_t fat_lba = fat_start + (cl * 4) / 512;
                     uint8_t fat_sec[512];
                     if (ata_read_sector(current_disk, fat_lba, fat_sec) != 0) {
-                        kprint("Error reading FAT\n");
+                        kprint("<(0c)>Error reading FAT<(0f)>\n");
+                        mfree(entries);
                         return;
                     }
                     uint32_t fat_off = (cl * 4) % 512;
                     *(uint32_t*)&fat_sec[fat_off] = 0x0FFFFFFF;
                     if (ata_write_sector(current_disk, fat_lba, fat_sec) != 0) {
-                        kprint("Error writing FAT\n");
+                        kprint("<(0c)>Error writing FAT<(0f)>\n");
+                        mfree(entries);
                         return;
                     }
                     *(uint16_t*)(&new_sector[off + 20]) = (uint16_t)((cl >> 16) & 0xFFFF); // high
@@ -724,13 +735,15 @@ void shell_execute(char *input)
                     // --- конец исправления ---
                     // Write updated sector
                     if (ata_write_sector(current_disk, lba, new_sector) != 0) {
-                        kprint("Error writing dir\n");
+                        kprint("<(0c)>Error writing dir<(0f)>\n");
+                        mfree(entries);
                         return;
                     }
                     return;
                 }
             }
-            kprint("No free entry\n");
+            kprint("<(0c)>No free entry<(0f)>\n");
+            mfree(entries);
             return;
         }
         else if (strcmp(arg[0], "isotools") == 0)
@@ -817,14 +830,14 @@ void shell_execute(char *input)
                     }
                     char* buf = malloc(4096);
                     if (!buf) {
-                        kprint("<(04)>Error allocating memory<(0f)>\n\n");
+                        kprint("<(0c)>Error allocating memory<(0f)>\n\n");
                         continue;
                     }
                     kprintf("<(0a)>Reading file from ISO...<(0f)>\n");
                     toupper(subarg[1]);
                     int sz = iso9660_read(subarg[1], buf, 4095);
                     if (sz < 0) {
-                        kprintf("<(04)>Error reading file from ISO<(0f)>\n\n");
+                        kprintf("<(0c)>Error reading file from ISO<(0f)>\n\n");
                         mfree(buf);
                         continue;
                     }
@@ -833,7 +846,7 @@ void shell_execute(char *input)
                     mfree(buf);
                 } else if (strcmp(subarg[0], "cp") == 0) {
                     if (sub_count < 3) {
-                        kprint("Usage: cp [-r] <src> <dst>\n");
+                        kprint("<(0c)>Usage: cp [-r] <src> <dst><(0f)>\n");
                         continue;
                     }
                     int recursive = 0;
@@ -852,7 +865,7 @@ void shell_execute(char *input)
                 } else if (strcmp(subarg[0], "help") == 0) {
                     kprintf("isotools commands:\n  mount [devnum]\n  ls\n  cat <filename>\n  cp [-r] <src> <dst>\n  exit\n");
                 } else {
-                    kprintf("<(04)>Unknown isotools command: %s<(0f)>\n\n", subarg[0]);
+                    kprintf("<(0c)>Unknown isotools command: %s<(0f)>\n\n", subarg[0]);
                 }
             }
             mfree(cmd);
@@ -861,12 +874,12 @@ void shell_execute(char *input)
         else if (strcmp(arg[0], "logo") == 0) {
             uint8_t *bmp_data = malloc(219 * 87);
             if (!bmp_data) {
-                kprintf("<(04)>Error allocating memory<(0f)>\n\n");
+                kprintf("<(0c)>Error allocating memory<(0f)>\n\n");
                 return;
             }
             int bmp = iso9660_read("cdrom:/focus/images/logo.bmp", bmp_data, 219 * 87);
             if (bmp <= 0) {
-                kprintf("<(04)>Error reading logo.bmp<(0f)>\n\n");
+                kprintf("<(0c)>Error reading logo.bmp<(0f)>\n\n");
                 mfree(bmp_data);
                 return;
             }
@@ -877,13 +890,18 @@ void shell_execute(char *input)
         else if (strcmp(arg[0], "mkdir") == 0)
         {
             if (count < 2) {
-                kprint("Usage: mkdir [DIRNAME]\n");
+                kprint("<(0c)>Usage: mkdir [DIRNAME]<(0f)>\n");
                 return;
             }
-            fat32_dir_entry_t entries[32];
+            fat32_dir_entry_t *entries = malloc(32 * sizeof(fat32_dir_entry_t));
+            if (!entries) {
+                kprint("<(0c)>Error allocating memory for fat struct entries<(0f)>\n");
+                return;
+            }
             int n = fat32_read_dir(current_disk, current_dir_cluster, entries, 32);
             if (n < 0 || n >= 32) {
-                kprint("Directory full or error\n");
+                kprint("<(0c)>Directory full or error<(0f)>\n");
+                mfree(entries);
                 return;
             }
             // Directory name (8.3, without dot)
@@ -895,14 +913,16 @@ void shell_execute(char *input)
             uint8_t sector[512];
             uint32_t lba = fat32_cluster_to_lba(current_dir_cluster);
             if (ata_read_sector(current_disk, lba, sector) != 0) {
-                kprint("Error reading dir\n");
+                kprint("<(0c)>Error reading dir<(0f)>\n");
+                mfree(entries);
                 return;
             }
             // 1. Find free cluster for new directory
             uint32_t new_cl = find_free_cluster(current_disk);
             kprintf("find_free_cluster returned: %u\n", new_cl);
             if (new_cl == 0) {
-                kprint("No free cluster for directory\n");
+                kprint("<(0c)>No free cluster for directory<(0f)>\n");
+                mfree(entries);
                 return;
             }
             // 2. Mark cluster as used (FAT32: 0x0FFFFFFF)
@@ -910,13 +930,15 @@ void shell_execute(char *input)
             uint32_t fat_lba = fat_start + (new_cl * 4) / 512;
             uint8_t fat_sec[512];
             if (ata_read_sector(current_disk, fat_lba, fat_sec) != 0) {
-                kprint("Error reading FAT\n");
+                kprint("<(0c)>Error reading FAT<(0f)>\n");
+                mfree(entries);
                 return;
             }
             uint32_t off = (new_cl * 4) % 512;
             *(uint32_t*)&fat_sec[off] = 0x0FFFFFFF;
             if (ata_write_sector(current_disk, fat_lba, fat_sec) != 0) {
-                kprint("Error writing FAT\n");
+                kprint("<(0c)>Error writing FAT<(0f)>\n");
+                mfree(entries);
                 return;
             }
             // 3. Write directory entry
@@ -941,7 +963,8 @@ void shell_execute(char *input)
                     *(uint16_t*)(&new_sector[off + 26]) = (uint16_t)(new_cl & 0xFFFF); // low
                     // Write updated sector
                     if (ata_write_sector(current_disk, lba, new_sector) != 0) {
-                        kprint("Error writing dir\n");
+                        kprint("<(0c)>Error writing dir<(0f)>\n");
+                        mfree(entries);
                         return;
                     }
                     // Initialize new cluster with entries '.' and '..'
@@ -966,13 +989,15 @@ void shell_execute(char *input)
                     *(uint16_t*)(&newsec[52]) = (uint16_t)((parent_cl >> 16) & 0xFFFF); // high
                     *(uint16_t*)(&newsec[58]) = (uint16_t)(parent_cl & 0xFFFF); // low
                     if (ata_write_sector(current_disk, fat32_cluster_to_lba(new_cl), newsec) != 0) {
-                        kprint("Error initializing new dir\n");
+                        kprint("<(0c)>Error initializing new dir<(0f)>\n");
+                        mfree(entries);
                         return;
                     }
                     return;
                 }
             }
-            kprint("No free entry\n");
+            kprint("<(0c)>No free entry<(0f)>\n");
+            mfree(entries);
             return;
         }
         else if (strcmp(arg[0], "rm") == 0)
@@ -984,13 +1009,17 @@ void shell_execute(char *input)
                 path_idx = 2;
             }
             if (count <= path_idx) {
-                kprint("Usage: rm [-r] [PATH]\n");
+                kprint("<(0c)>Usage: rm [-r] [PATH]<(0f)>\n");
                 return;
             }
             // Determine path
             const char* path = arg[path_idx];
             uint32_t target_cluster = 0;
-            fat32_dir_entry_t entries[32];
+            fat32_dir_entry_t *entries = malloc(32 * sizeof(fat32_dir_entry_t));
+            if (!entries) {
+                kprint("<(0c)>Error allocating memory for fat struct entries<(0f)>\n");
+                return;
+            }
             int parent_cluster = 0;
             char fatname[11];
             // Resolve path
@@ -1021,12 +1050,18 @@ void shell_execute(char *input)
             }
             // If there's a path, search parent cluster
             if (last) {
-                char parent_path[256];
+                char *parent_path = malloc(256);
+                if (!parent_path) {
+                    kprint("<(0c)>Error allocating memory for parent path<(0f)>\n");
+                    mfree(entries);
+                    return;
+                }
                 strncpy(parent_path, path, last - path);
                 parent_path[last - path] = 0;
                 uint32_t tmp_cl = 0;
                 fat32_resolve_path(current_disk, parent_path, &tmp_cl);
                 parent_cluster = tmp_cl;
+                mfree(parent_path);
             }
             // Read parent directory
             qemu_debug_printf("parent_cluster: %u\n", parent_cluster);
@@ -1057,11 +1092,16 @@ void shell_execute(char *input)
                                 }
                             }
                         } else {
-                            kprint("Use rm -r to remove directory\n");
+                            kprint("<(0c)>Use rm -r to remove directory<(0f)>\n");
                         }
                     } else {
                         // File
-                        uint8_t sector[512];
+                        uint8_t *sector = malloc(512);
+                        if (!sector) {
+                            kprint("<(0c)>Error allocating memory for sector<(0f)>\n");
+                            mfree(entries);
+                            return;
+                        }
                         uint32_t lba = fat32_cluster_to_lba(parent_cluster);
                         if (ata_read_sector(current_disk, lba, sector) == 0) {
                             for (int off = 0; off < 512; off += 32) {
@@ -1072,32 +1112,34 @@ void shell_execute(char *input)
                                 }
                             }
                         }
+                        mfree(sector);
                     }
                     break;
                 }
             }
             if (!found) {
-                kprint("Not found\n");
+                kprint("<(0c)>Not found<(0f)>\n");
             }
+            mfree(entries);
             return;
         }
         else if (strcmp(arg[0], "cd") == 0)
         {
             if (count < 2) {
-                kprint("Usage: cd <path>\n");
+                kprint("<(0c)>Usage: cd <path><(0f)>\n");
                 return;
             }
             int cd_res = fat32_change_dir(current_disk, arg[1]);
             if (cd_res == 0) {
                 return;
             } else if (cd_res == -1) {
-                kprintf("No such directory: %s\n", arg[1]);
+                kprintf("<(0c)>No such directory: %s<(0f)>\n", arg[1]);
             } else if (cd_res == -2) {
-                kprintf("Not a directory: %s\n", arg[1]);
+                kprintf("<(0c)>Not a directory: %s<(0f)>\n", arg[1]);
             } else if (cd_res == -3) {
                 kprintf("Already at root directory\n");
             } else {
-                kprintf("Failed to change directory\n");
+                kprintf("<(0c)>Failed to change directory<(0f)>\n");
             }
             return;
         }
@@ -1166,9 +1208,9 @@ void shell_execute(char *input)
             if (count < 2)
             {
                 char *input = malloc(1024);
-                if (!&input)
+                if (!input)
                 {
-                    kprintf("Error allocating memory\n");
+                    kprintf("<(0c)>Error allocating memory<(0f)>\n");
                     return;
                 }
                 for (;;)
@@ -1204,10 +1246,15 @@ void shell_execute(char *input)
                 return;
             }
             char *filename = arg[1];
-            fat32_dir_entry_t entries[32];
+            fat32_dir_entry_t *entries = malloc(32 * sizeof(fat32_dir_entry_t));
+            if (!entries) {
+                kprint("<(0c)>Error allocating memory for fat struct entries<(0f)>\n");
+                return;
+            }
             int n = fat32_read_dir(current_disk, current_dir_cluster, entries, 32);
             if (n < 0) {
-                kprint("Error reading directory\n");
+                kprint("<(0c)>Error reading directory<(0f)>\n");
+                mfree(entries);
                 return;
             }
             char fatname[12];
@@ -1234,7 +1281,8 @@ void shell_execute(char *input)
                 }
             }
             if (!found) {
-                kprint("File not found\n");
+                kprint("<(0c)>File not found<(0f)>\n");
+                mfree(entries);
                 return;
             }
             uint8_t buffer[16];
@@ -1257,6 +1305,7 @@ void shell_execute(char *input)
                 kprint("\n");
                 offset += bytes_read;
             }
+            mfree(entries);
         }
         else if (strcmp(arg[0], "isomount") == 0) {
             int devnum = iso9660_atapi_devnum;
@@ -1264,7 +1313,7 @@ void shell_execute(char *input)
             if (iso9660_mount_dev(devnum) == 0) {
                 kprintf("ISO9660 successfully mounted (ATAPI #%d)\n", devnum);
             } else {
-                kprint("Error mounting ISO9660\n");
+                kprint("<(0c)>Error mounting ISO9660<(0f)>\n");
             }
             return;
         } else if (strcmp(arg[0], "isols") == 0) {
