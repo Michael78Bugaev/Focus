@@ -43,4 +43,10 @@ void apic_init(void);
 // vector: interrupt vector to invoke (must match IDT handler)
 void apic_timer_init(uint32_t initial_count, uint32_t mode, uint8_t vector);
 
+// Keep track of timer ticks
+uint32_t get_apic_ticks(void);
+
+// Reset tick counter to zero
+void apic_reset_ticks(void);
+
 #endif // APIC_H 

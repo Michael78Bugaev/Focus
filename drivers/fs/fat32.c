@@ -14,11 +14,21 @@ static char my_toupper(char c) {
 }
 
 int fat32_mount(uint8_t drive) {
-    uint8_t sector[512];
+    uint8_t *sector = malloc(512);
+    if (!sector)
+    {
+        kprintf("<(0c)>Error allocating memory\n");
+        return;
+    }
     if (ata_read_sector(drive, 0, sector) != 0)
         return -1;
     for (int i = 0; i < sizeof(fat32_bpb); i++)
         ((uint8_t*)&fat32_bpb)[i] = sector[i];
+
+    // Some images have SPC set to 0 (invalid). Treat as 1 to avoid division by zero later.
+    if (fat32_bpb.sectors_per_cluster == 0) {
+        fat32_bpb.sectors_per_cluster = 1;
+    }
 
     sectors_per_fat = fat32_bpb.table_size_32;
     fat_start = fat32_bpb.reserved_sector_count;
@@ -54,9 +64,26 @@ uint32_t fat32_get_next_cluster(uint8_t drive, uint32_t cluster) {
     return next & 0x0FFFFFFF;
 }
 
+// FIRST_EDIT: Insert helper to find a free cluster before its usage
+static uint32_t find_free_cluster(uint8_t drive) {
+    // Search for a cluster marked free (FAT entry == 0)
+    for (uint32_t c = 3; c < 0x0FFFFFEF; c++) {
+        if (fat32_get_next_cluster(drive, c) == 0x00000000) {
+            return c;
+        }
+    }
+    // No free cluster found
+    return 0;
+}
+
 int fat32_read_dir(uint8_t drive, uint32_t cluster, fat32_dir_entry_t* entries, int max_entries) {
     int entry_count = 0;
-    uint8_t sector[512];
+    uint8_t *sector = malloc(512);
+    if (!sector)
+    {
+        kprintf("<(0c)>Error allocating memory\n");
+        return;
+    }
     do {
         for (uint8_t s = 0; s < fat32_bpb.sectors_per_cluster; s++) {
             uint32_t lba = fat32_cluster_to_lba(cluster) + s;
@@ -153,8 +180,11 @@ int fat32_resolve_path(uint8_t drive, const char* path, uint32_t* target_cluster
                 // Если мы в корневом каталоге, то остаёмся в нём
                 return -3;
             }
-            // Ищем запись .. в текущем каталоге
-            fat32_dir_entry_t entries[16];
+            fat32_dir_entry_t *entries = malloc(16 * sizeof(fat32_dir_entry_t));
+            if (!entries) {
+                kprintf("<(0c)>Error allocating memory for directory entries<(0f)>\n");
+                return -1;
+            }
             int count = fat32_read_dir(drive, *target_cluster, entries, 16);
             for (int j = 0; j < count; j++) {
                 if (strcmp(entries[j].name, "..") == 0) {
@@ -162,9 +192,14 @@ int fat32_resolve_path(uint8_t drive, const char* path, uint32_t* target_cluster
                     break;
                 }
             }
+            mfree(entries);
         } else {
             // Обычная директория
-            fat32_dir_entry_t entries[16];
+            fat32_dir_entry_t *entries = malloc(16 * sizeof(fat32_dir_entry_t));
+            if (!entries) {
+                kprintf("<(0c)>Error allocating memory for directory entries<(0f)>\n");
+                return -1;
+            }
             int count = fat32_read_dir(drive, *target_cluster, entries, 16);
             int found = 0;
             for (int j = 0; j < count; j++) {
@@ -180,12 +215,9 @@ int fat32_resolve_path(uint8_t drive, const char* path, uint32_t* target_cluster
                     for (int i = 0; i < clen && i < 8; i++)
                         fatname[i] = my_toupper(component[i]);
                 } else {
-                    for (int i = 0; i < dot && i < 8; i++)
-                        fatname[i] = my_toupper(component[i]);
                     for (int i = dot + 1, j = 8; i < clen && j < 11; i++, j++)
                         fatname[j] = my_toupper(component[i]);
                 }
-                // Сравниваем с entries[j].name
                 int match = 1;
                 for (int k = 0; k < 11; k++) {
                     if (fatname[k] != entries[j].name[k]) { match = 0; break; }
@@ -196,10 +228,15 @@ int fat32_resolve_path(uint8_t drive, const char* path, uint32_t* target_cluster
                         found = 1;
                         break;
                     }
+                    mfree(entries);
                     return -2; // Это не директория
                 }
             }
-            if (!found) return -1; // Директория не найдена
+            if (!found) {
+                mfree(entries);
+                return -1; // Директория не найдена
+            }
+            mfree(entries);
         }
     }
     return 0;
@@ -224,126 +261,8 @@ int fat32_change_dir(uint8_t drive, const char* path) {
 }
 
 int fat32_write_file(uint8_t drive, const char* path, const uint8_t* buf, uint32_t size) {
-    // 1. Найти или создать файл в текущем каталоге
-    fat32_dir_entry_t *entries = malloc(32 * sizeof(fat32_dir_entry_t));
-    if (!entries) {
-        kprintf("<(0c)>Error allocating memory<(0f)>\n");
-        return -7;
-    }
-    int n = fat32_read_dir(drive, current_dir_cluster, entries, 32);
-    int file_idx = -1;
-    char fatname[11];
-    memset(fatname, ' ', 11);
-    int clen = strlen(path);
-    int dot = -1;
-    for (int i = 0; i < clen; i++) if (path[i] == '.') { dot = i; break; }
-    if (dot == -1) {
-        for (int i = 0; i < clen && i < 8; i++) fatname[i] = toupper(path[i]);
-    } else {
-        for (int i = 0; i < dot && i < 8; i++) fatname[i] = toupper(path[i]);
-        for (int i = dot + 1, j = 8; i < clen && j < 11; i++, j++) fatname[j] = toupper(path[i]);
-    }
-    for (int i = 0; i < n; i++) {
-        int match = 1;
-        for (int k = 0; k < 11; k++) if (fatname[k] != entries[i].name[k]) { match = 0; break; }
-        if (match) { 
-            if (entries[i].attr & 0x10) return -1; // Это директория
-            file_idx = i; 
-            break; 
-        }
-    }
-    uint32_t first_cluster = 0;
-    if (file_idx == -1) {
-        // Создать новую запись
-        // Найти свободную запись в каталоге
-        uint8_t sector[512];
-        uint32_t lba = fat32_cluster_to_lba(current_dir_cluster);
-        if (ata_read_sector(drive, lba, sector) != 0) return -1;
-        int off = -1;
-        for (int i = 0; i < 512; i += 32) {
-            if (sector[i] == 0x00 || sector[i] == 0xE5) { off = i; break; }
-        }
-        if (off == -1) return -2;
-        // Найти свободный кластер
-        uint32_t cl = 0;
-        for (uint32_t c = 2; c < 0x0FFFFFEF; c++) {
-            if (fat32_get_next_cluster(drive, c) == 0x00000000) { cl = c; break; }
-        }
-        if (cl == 0) return -3;
-        // Пометить кластер как занятый
-        uint32_t fat_lba = fat_start + (cl * 4) / 512;
-        uint8_t fat_sec[512];
-        if (ata_read_sector(drive, fat_lba, fat_sec) != 0) return -4;
-        uint32_t fat_off = (cl * 4) % 512;
-        *(uint32_t*)&fat_sec[fat_off] = 0x0FFFFFFF;
-        if (ata_write_sector(drive, fat_lba, fat_sec) != 0) return -5;
-        // Записать запись каталога
-        memset(&sector[off], ' ', 11);
-        for (int n = 0; n < 11; n++) sector[off + n] = fatname[n];
-        sector[off + 11] = 0x20; // attr: archive
-        *(uint16_t*)(&sector[off + 20]) = (uint16_t)((cl >> 16) & 0xFFFF); // high
-        *(uint16_t*)(&sector[off + 26]) = (uint16_t)(cl & 0xFFFF); // low
-        *(uint32_t*)(&sector[off + 28]) = 0; // file size = 0
-        if (ata_write_sector(drive, lba, sector) != 0) return -6;
-        first_cluster = cl;
-    } else {
-        // Файл найден, перезаписываем
-        first_cluster = ((uint32_t)entries[file_idx].first_cluster_high << 16) | entries[file_idx].first_cluster_low;
-    }
-    //kprintf("WRITE: first_cluster = %u, size = %u\n", first_cluster, size);
-    // 2. Записать данные в кластеры
-    uint32_t cluster = first_cluster;
-    uint32_t bytes_written = 0;
-    uint8_t *sector = malloc(512);
-    if (!sector) {
-        kprintf("<(0c)>Error allocating memory<(0f)>\n");
-        return -7;
-    }
-    while (bytes_written < size && cluster < 0x0FFFFFF8) {
-        for (uint8_t s = 0; s < fat32_bpb.sectors_per_cluster; s++) {
-            uint32_t lba = fat32_cluster_to_lba(cluster) + s;
-            uint32_t to_write = (size - bytes_written > 512) ? 512 : (size - bytes_written);
-            memset(sector, 0, 512);
-            for (uint32_t i = 0; i < to_write; i++) {
-                sector[i] = buf[bytes_written + i];
-            }
-            if (ata_write_sector(drive, lba, sector) != 0) return -7;
-            bytes_written += to_write;
-            if (bytes_written >= size) break;
-        }
-        // Для простоты не поддерживаем цепочки кластеров (только один кластер на файл)
-        break;
-    }
-    // 3. Обновить размер файла в записи каталога
-    uint8_t *dir_sector = malloc(512);
-    if (!dir_sector) {
-        kprintf("<(0c)>Error allocating memory<(0f)>\n");
-        mfree(sector);
-        return -7;
-    }
-    uint32_t dir_lba = fat32_cluster_to_lba(current_dir_cluster);
-    if (ata_read_sector(drive, dir_lba, dir_sector) != 0) return -8;
-    int off = -1;
-    for (int i = 0; i < 512; i += 32) {
-        int match = 1;
-        for (int k = 0; k < 11; k++) if (fatname[k] != dir_sector[i+k]) { match = 0; break; }
-        if (match) { off = i; break; }
-    }
-    if (off == -1) {
-        kprintf("<(0c)>No free space in dir<(0f)>\n");
-        mfree(sector);
-        mfree(dir_sector);
-        return -9;
-    }
-    *(uint32_t*)(&dir_sector[off + 28]) = bytes_written;
-    if (ata_write_sector(drive, dir_lba, dir_sector) != 0) {
-        mfree(sector);
-        mfree(dir_sector);
-        return -10;
-    }
-    mfree(sector);
-    mfree(dir_sector);
-    return bytes_written;
+    // Обработка полного цепочного ввода/вывода
+    return fat32_write_file_data(drive, path, buf, size, 0);
 }
 
 // Создать пустой файл в текущей директории
@@ -396,7 +315,7 @@ int fat32_create_file(uint8_t drive, const char* path) {
     if (off == -1) return -3;
     // Найти свободный кластер
     uint32_t cl = 0;
-    for (uint32_t c = 2; c < 0x0FFFFFEF; c++) {
+    for (uint32_t c = 3; c < 0x0FFFFFEF; c++) {
         if (fat32_get_next_cluster(drive, c) == 0x00000000) { cl = c; break; }
     }
     if (cl == 0) {
@@ -505,8 +424,38 @@ int fat32_write_file_data(uint8_t drive, const char* path, const uint8_t* buf, u
     uint32_t cluster = first_cluster;
     uint32_t bytes_written = 0;
     uint32_t pos = offset;
+    uint32_t bytes_to_skip = offset;
+    uint32_t cluster_size = fat32_bpb.sectors_per_cluster * 512;
+
+    while (bytes_to_skip >= cluster_size) {
+        uint32_t next_cl = fat32_get_next_cluster(drive, cluster);
+        if (next_cl >= 0x0FFFFFF8) {
+            // allocate new cluster same as above (reuse helper)
+            uint32_t new_cl = find_free_cluster(drive);
+            if (new_cl == 0) { kprintf("<(0c)>seek: no free cluster<(0f)>\n"); mfree(sector); mfree(entries); return -17; }
+            // link clusters
+            uint32_t fat_off = cluster * 4;
+            uint32_t fat_lba = fat_start + (fat_off / 512);
+            uint8_t fatsec_tmp[512];
+            if (ata_read_sector(drive, fat_lba, fatsec_tmp) != 0) { mfree(sector); mfree(entries); return -18; }
+            *(uint32_t*)&fatsec_tmp[fat_off % 512] = new_cl;
+            ata_write_sector(drive, fat_lba, fatsec_tmp);
+            // mark new as EOC
+            uint32_t new_off = new_cl * 4;
+            uint32_t new_lba = fat_start + (new_off / 512);
+            if (ata_read_sector(drive, new_lba, fatsec_tmp) != 0) { mfree(sector); mfree(entries); return -19; }
+            *(uint32_t*)&fatsec_tmp[new_off % 512] = 0x0FFFFFFF;
+            ata_write_sector(drive, new_lba, fatsec_tmp);
+            next_cl = new_cl;
+        }
+        cluster = next_cl;
+        bytes_to_skip -= cluster_size;
+        if (pos >= cluster_size) pos -= cluster_size; else pos = 0;
+    }
+
     while (bytes_written < size && cluster < 0x0FFFFFF8) {
-        for (uint8_t s = 0; s < fat32_bpb.sectors_per_cluster; s++) {
+        // Записываем данные в текущий кластер
+        for (uint8_t s = 0; s < fat32_bpb.sectors_per_cluster && bytes_written < size; s++) {
             uint32_t lba = fat32_cluster_to_lba(cluster) + s;
             uint32_t sector_offset = pos % 512;
             uint32_t to_write = (size - bytes_written > 512 - sector_offset) ? 512 - sector_offset : (size - bytes_written);
@@ -520,19 +469,91 @@ int fat32_write_file_data(uint8_t drive, const char* path, const uint8_t* buf, u
             } else {
                 memset(sector, 0, 512);
             }
-            strncpy((void*)buf + bytes_written, sector + sector_offset, to_write);
+            // Use manual byte copy to avoid signature confusion
+            for (uint32_t ci = 0; ci < to_write; ++ci) {
+                sector[sector_offset + ci] = buf[bytes_written + ci];
+            }
+            // Debug: dump first 16 bytes before write
+            if (bytes_written == 0) {
+                qemu_debug_printf("FAT32 WR lba %u first16:", lba);
+                for (int dbg=0; dbg<16; ++dbg) qemu_debug_printf("%02X ", sector[dbg]);
+                qemu_debug_printf("\n");
+            }
             if (ata_write_sector(drive, lba, sector) != 0) {
                 kprintf("<(0c)>Error writing sector %d.<(0f)>\n", lba);
                 mfree(sector);
                 mfree(entries);
                 return -21;
             }
+            // Read back to verify
+            if (bytes_written == 0) {
+                uint8_t vsec[16];
+                ata_read_sector(drive, lba, vsec);
+                qemu_debug_printf("VERIFY lba %u:", lba);
+                for (int dbg=0; dbg<16; ++dbg) qemu_debug_printf("%02X ", vsec[dbg]);
+                qemu_debug_printf("\n");
+            }
             bytes_written += to_write;
             pos += to_write;
-            if (bytes_written >= size) break;
         }
-        // Для простоты не поддерживаем цепочки кластеров (только один кластер на файл)
-        break;
+        // Если ещё есть данные, нужно перейти к следующему кластеру или выделить новый
+        if (bytes_written < size) {
+            // читаем FAT для текущего кластера
+            uint8_t *fatsec = malloc(512);
+            if (!fatsec) { kprintf("<(0c)>Error allocating memory for FAT sector<(0f)>\n"); mfree(sector); mfree(entries); return -22; }
+            uint32_t fat_offset = cluster * 4;
+            uint32_t fat_lba = fat_start + (fat_offset / 512);
+            if (ata_read_sector(drive, fat_lba, fatsec) != 0) {
+                kprintf("<(0c)>Error reading FAT sector %d.<(0f)>\n", fat_lba);
+                mfree(fatsec);
+                mfree(sector);
+                mfree(entries);
+                return -23;
+            }
+            uint32_t next = (*(uint32_t*)&fatsec[fat_offset % 512]) & 0x0FFFFFFF;
+            if (next >= 0x0FFFFFF8) {
+                // выделяем новый кластер
+                uint32_t new_cl = find_free_cluster(drive);
+                if (new_cl == 0) {
+                    kprintf("<(0c)>No free cluster for file<(0f)>\n");
+                    mfree(fatsec);
+                    mfree(sector);
+                    mfree(entries);
+                    return -24;
+                }
+                // связать текущий кластер с новым
+                *(uint32_t*)&fatsec[fat_offset % 512] = new_cl;
+                if (ata_write_sector(drive, fat_lba, fatsec) != 0) {
+                    kprintf("<(0c)>Error updating FAT sector %d.<(0f)>\n", fat_lba);
+                    mfree(fatsec);
+                    mfree(sector);
+                    mfree(entries);
+                    return -25;
+                }
+                // инициализировать новый кластер концом цепи
+                uint32_t new_offset = new_cl * 4;
+                uint32_t new_lba = fat_start + (new_offset / 512);
+                if (ata_read_sector(drive, new_lba, fatsec) != 0) {
+                    kprintf("<(0c)>Error reading FAT sector %d.<(0f)>\n", new_lba);
+                    mfree(fatsec);
+                    mfree(sector);
+                    mfree(entries);
+                    return -26;
+                }
+                *(uint32_t*)&fatsec[new_offset % 512] = 0x0FFFFFFF;
+                if (ata_write_sector(drive, new_lba, fatsec) != 0) {
+                    kprintf("<(0c)>Error writing FAT sector %d.<(0f)>\n", new_lba);
+                    mfree(fatsec);
+                    mfree(sector);
+                    mfree(entries);
+                    return -27;
+                }
+                cluster = new_cl;
+            } else {
+                cluster = next;
+            }
+            mfree(fatsec);
+        }
     }
     // Обновить размер файла, если увеличился
     if (offset + size > file_size) {
@@ -570,7 +591,7 @@ int fat32_write_file_data(uint8_t drive, const char* path, const uint8_t* buf, u
     return bytes_written;
 }
 
-// Прочитать данные из файла по смещению (без поддержки цепочек кластеров)
+// Прочитать данные из файла по смещению (с поддержкой цепочек кластеров)
 int fat32_read_file_data(uint8_t drive, const char* path, uint8_t* buf, uint32_t size, uint32_t offset) {
     fat32_dir_entry_t *entries = malloc(32 * sizeof(fat32_dir_entry_t));
     if (!entries) {
@@ -607,6 +628,22 @@ int fat32_read_file_data(uint8_t drive, const char* path, uint8_t* buf, uint32_t
     uint32_t cluster = first_cluster;
     uint32_t bytes_read = 0;
     uint32_t pos = offset;
+    uint32_t bytes_to_skip = offset;
+    uint32_t cluster_size = fat32_bpb.sectors_per_cluster * 512;
+
+    // Skip clusters to reach the starting offset
+    while (bytes_to_skip >= cluster_size) {
+        uint32_t next_cl = fat32_get_next_cluster(drive, cluster);
+        if (next_cl >= 0x0FFFFFF8) {
+            // Offset beyond file; nothing to read
+            mfree(entries);
+            return 0;
+        }
+        cluster = next_cl;
+        bytes_to_skip -= cluster_size;
+        if (pos >= cluster_size) pos -= cluster_size; else pos = 0;
+    }
+
     uint8_t *sector = malloc(512);
     if (!sector) {
         kprintf("<(0c)>Error allocating memory for fat sector.<(0f)>\n");
@@ -624,13 +661,17 @@ int fat32_read_file_data(uint8_t drive, const char* path, uint8_t* buf, uint32_t
                 mfree(entries);
                 return -2;
             }
-            strncpy((char*)buf + bytes_read, (char*)sector + sector_offset, to_read);
+            for (uint32_t ci = 0; ci < to_read; ++ci) {
+                buf[bytes_read + ci] = sector[sector_offset + ci];
+            }
             bytes_read += to_read;
             pos += to_read;
             if (bytes_read >= size) break;
         }
-        // Для простоты не поддерживаем цепочки кластеров (только один кластер на файл)
-        break;
+        // Переходим к следующему кластеру, если ещё есть данные для чтения
+        if (bytes_read < size) {
+            cluster = fat32_get_next_cluster(drive, cluster);
+        }
     }
     mfree(sector);
     mfree(entries);

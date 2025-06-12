@@ -1,0 +1,16 @@
+<(endl)>
+<(0e)>Focus v1.5 Global Update: What's new?<(endl)>
+อออออออออออออออออออออออออออ<(endl)>
+<(endl)>
+Focus is a free x86-i386 operating system using MIT license.<(endl)>
+There are in the new version of Focus some games. In addition to games,<(endl)>
+this version contains new commands and features that ensure flawless and<(endl)>
+convenient operation with operating system and filesystems:<(endl)>
+ ? isotools ? Utilities for efficient work with (only!) ATAPI ISO9660<(endl)>
+ ? edit     ? New absolute simple file editor<(endl)>
+ ? ping     ? Pinging only to IP-adresses<(endl)>
+ ? iptools  ? Utilities for efficient work with ethernet<(endl)>
+ ? fpkg     ? Focus Package Manager to install packages from <(0b)>asterkernel.ru<(endl)>
+<(endl)>
+ ? "init.fcs" - A file required for further kernel startup <(endl)>
+

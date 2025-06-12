@@ -37,6 +37,11 @@ void apic_init(void) {
 
 // Keep track of timer ticks
 static volatile uint32_t apic_ticks = 0;
+
+void apic_reset_ticks(void) {
+    apic_ticks = 0;
+}
+
 uint32_t get_apic_ticks(void) {
     return apic_ticks;
 }
@@ -45,7 +50,6 @@ uint32_t get_apic_ticks(void) {
 void apic_timer_handler(struct InterruptRegisters *regs) {
     // Acknowledge the interrupt
     apic_write(APIC_EOI, 0);
-    //qemu_debug_printf("APIC timer handler\n");
     apic_ticks++;
     // On every 10th tick, swap the VBE framebuffer
     if (apic_ticks % 200 == 0) {

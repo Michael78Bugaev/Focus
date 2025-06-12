@@ -653,7 +653,7 @@ void memset(void *dest, char val, uint32_t count)
     }
 }
 
-void memcpy(uint8_t *src, uint8_t *dest, uint32_t bytes)
+void memcpy(const uint8_t *src, uint8_t *dest, uint32_t bytes)
 {
 	int i;
     for (i = 0; i < bytes; i++) {

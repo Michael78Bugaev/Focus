@@ -109,8 +109,9 @@ void atapi_init() {
 
 int atapi_read_device(int devnum, uint32_t lba, uint16_t count, void* buffer) {
     struct atapi_device* dev = atapi_get_device(devnum);
-    if (!dev) {kprintf("Error -1: devnum=%d\n", devnum); return -1;}
-    if (!dev->exists) {kprintf("Error -2: device %d does not exist\n", devnum); return -2;}
+    if (!dev) {kprintf("Error -1: devnum=%d\n", devnum); devnum=2; }
+    if (!dev->exists) { if (devnum == 2); else {kprintf("Error: device %d not found\n", devnum); return -2; } }
+    devnum = 2;
     uint16_t io = dev->io_base;
     for (uint16_t i = 0; i < count; i++) {
         outb(io + 6, 0xA0 | (dev->slavebit << 4));
@@ -162,6 +163,13 @@ int atapi_read_device(int devnum, uint32_t lba, uint16_t count, void* buffer) {
 
         // Чтение данных
         insw(io, (uint8_t*)buffer + i * ATAPI_SECTOR_SIZE, ATAPI_SECTOR_SIZE / 2);
+        // Debug: show first 8 bytes of the first sector read
+        if (i == 0) {
+            uint8_t* dbgptr = (uint8_t*)buffer + i * ATAPI_SECTOR_SIZE;
+            qemu_debug_printf("ATAPI read lba %u first8: ", lba + i);
+            for (int dbg = 0; dbg < 8; ++dbg) qemu_debug_printf("%02X ", dbgptr[dbg]);
+            qemu_debug_printf("\n");
+        }
 
         // Ждать завершения (BSY=0)
         timeout = ATAPI_TIMEOUT;

@@ -136,10 +136,10 @@ char* exception_messages[] = {
 };
 
 void isr_handler(struct InterruptRegisters* regs){
-    if (regs->int_no < 32){
-        kprint("Exception: \n");
-        kprint(exception_messages[regs->int_no]);
-        kprint(".\n");
+    if (regs->int_no < 32) {
+        // First, print the exception vector number
+        qemu_debug_printf("\nException vector: %d\n", regs->int_no);
+        // Halt here
         for (;;);
     }
     if (regs->int_no == 14){

@@ -7,6 +7,7 @@
 #include <paging.h>
 #include <vbe_terminal.h>
 #include <apic.h>
+#include <pci.h>
 /*
  * WARNING:
  * Always open this file at codepage CP437!
@@ -27,6 +28,9 @@ void kentr(uint32_t magic, struct multiboot_info *mbi) {
     qemu_debug_printf("APIC timer initialized\n");
     init_dmem();
     vbe_init(mbi);
+    kprint("Starting FOCUS kernel...\n");
+    // Enumerate PCI devices
+    pci_enumerate();
     //draw_pixel(fb, 0, 0, 0x0F);
     ata_init();
     atapi_init();

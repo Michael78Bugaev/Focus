@@ -60,3 +60,6 @@ kernel: $(C_OBJECTS) $(ASM_OBJECTS)
 # Цель для очистки
 clean:
 	@rm -rf $(BUILD_DIR)
+
+debug:
+	@qemu-system-i386 -m 1500M -drive file=../hda.img,format=raw,if=ide -cdrom focusos.iso -boot d -serial stdio -s -S
