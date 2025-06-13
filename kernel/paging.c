@@ -1,34 +1,40 @@
+/*
+ * Simple identity-mapping paging using 4 MiB pages (PSE).
+ * Every virtual address maps to the same physical address, so
+ * existing flat-kernel code continues to work, но теперь есть
+ * возможность применять защиту страниц, создавать guard-pages
+ * для стека и т. д.
+ *
+ *  – page directory occupies 4 KiB and is aligned.
+ *  – all 1024 PDE are filled: 4 GiB / 4 MiB = 1024.
+ *  – PSE (bit 4 CR4) is enabled, and in PDE we put PS (bit 7).
+ */
+
 #include <paging.h>
+#include <mem.h>
 
-// Aligned arrays for page directory and first-level page table
 static uint32_t page_directory[1024] __attribute__((aligned(4096)));
-static uint32_t first_page_table[1024] __attribute__((aligned(4096)));
 
-void init_paging(void) {
-    // Disable interrupts during paging setup
-    asm volatile("cli");
-    // Identity-map the first 4 MiB of memory using 4 KiB pages
+void init_paging(void)
+{
+    /* 1. Fill PDE: base physical address and flags */
     for (uint32_t i = 0; i < 1024; i++) {
-        first_page_table[i] = (i << 12) | PAGE_PRESENT | PAGE_RW;
+        uint32_t phys = i * 0x400000;          /* 4 MiB */
+        page_directory[i] = phys | PAGE_PRESENT | PAGE_RW | (1 << 7); /* PS=1 */
     }
 
-    // Setup page directory: entry 0 points to our first page table
-    page_directory[0] = (uint32_t)first_page_table | PAGE_PRESENT | PAGE_RW;
-    // Mark other page directory entries as not present
-    for (uint32_t i = 1; i < 1024; i++) {
-        page_directory[i] = 0;
-    }
-    qemu_debug_printf("Loading page directory into CR3\n");
-    // Load the page directory into CR3
-    asm volatile("mov %0, %%cr3" :: "r" (page_directory));
-    // Enable paging by setting the PG bit (bit 31) in CR0
-    qemu_debug_printf("Enabling paging\n");
+    /* 2. Load PD address to CR3 (paging disabled ⇒ VA=PA). */
+    asm volatile("mov %0, %%cr3" :: "r"(page_directory));
+
+    /* 3. Enable PSE (Intel® 3A) – bit4 CR4 */
+    uint32_t cr4;
+    asm volatile ("mov %%cr4, %0" : "=r"(cr4));
+    cr4 |= 0x00000010;        /* PSE */
+    asm volatile ("mov %0, %%cr4" :: "r"(cr4));
+
+    /* 4. Enable paging (bit31 PG in CR0) */
     uint32_t cr0;
-    asm volatile ("mov %%cr0, %0" : "=r" (cr0));
-    qemu_debug_printf("CR0 before: 0x%08x\n", cr0);
-    cr0 |= 0x80000000;
-    asm volatile("mov %0, %%cr0" :: "r" (cr0));
-    qemu_debug_printf("CR0 after: 0x%08x\n", cr0);
-    // Re-enable interrupts now that paging is active
-    asm volatile("sti");
+    asm volatile ("mov %%cr0, %0" : "=r"(cr0));
+    cr0 |= 0x80000000;        /* PG */
+    asm volatile ("mov %0, %%cr0" :: "r"(cr0));
 } 

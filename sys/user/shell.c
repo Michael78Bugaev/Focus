@@ -8,15 +8,32 @@
 #include <elf.h>
 #include <iso9660.h>
 #include <sysinfo.h>
+#include <net_if.h>
+#include <stddef.h>
 
 extern void snake_main();
+
+static int run_fex_fat(const char *path);
+static int run_fex_iso(const char *path);
+
+static void str_append(char *dest, const char *src, size_t buf_size);
 
 // Прототипы функций
 static int isocpy_file(const char* src, const char* dst);
 static int isocpy_dir(const char* src, const char* dst);
 
+static inline uint16_t htons(uint16_t x) { return (x>>8) | (x<<8); }
+extern void net_poll_once(void);
+extern int net_dequeue_frame(uint8_t **data, uint16_t *len);
+
 int current_disk = 0;
 static uint8_t ide_buf[512]; // Buffer for read/write operations
+
+// Path prefix where the shell will search for binary (.FEX) executables when
+// a command is not recognised.  Can be changed at run-time by entering the
+// assignment  BIN=<path>  (for example  BIN=CDROM:/focus/bin/  or  BIN=0:\BIN\ ).
+// Empty string means "use current directory only".
+static char bin_path[256] = "";
 
 // Prototypes of functions
 uint8_t hex_to_int(char c);
@@ -191,6 +208,7 @@ void shell_execute(char *input)
             kprint("    isomount <devnum> - mount ISO9660 volume\n");
             kprint("    isols - list files in ISO9660 volume\n");
             kprint("    sysinfo - display system information\n");
+            kprint("    ping <ip> - send ICMP echo requests\n");
             return;
         }
         else if (strcmp(arg[0], "clear") == 0)
@@ -1343,7 +1361,7 @@ void shell_execute(char *input)
                 kprintf("Usage: fcsasm <src.asm> <dst.ex>\n");
             } else {
                 kprintf("FCSASM v0.0.4\n\n");
-                fcsasm_compile(arg[1], arg[2]);
+                //fcsasm_compile(arg[1], arg[2]);
                 kprint("\n");
             }
         } else if (strcmp(arg[0], "xxd") == 0) {
@@ -1434,7 +1452,7 @@ void shell_execute(char *input)
         }
         else if (strcmp(arg[0], "snake") == 0)
         {
-            //snake_main();
+            snake_main();
             return;
         }
         else if (strcmp(arg[0], "sysinfo") == 0)
@@ -1442,36 +1460,161 @@ void shell_execute(char *input)
             sysinfo_command();
             return;
         }
-        else
-        {
-            // Попытка запустить любой файл как бинарный
-            // fat32_dir_entry_t entries[32];
-            // int n = fat32_read_dir(current_disk, current_dir_cluster, entries, 32);
-            // char fatname[12];
-            // memset(fatname, ' ', 11);
-            // fatname[11] = 0;
-            // int clen = strlen(arg[0]);
-            // int dot = -1;
-            // for (int i = 0; i < clen; i++) if (arg[0][i] == '.') { dot = i; break; }
-            // if (dot == -1) {
-            //     for (int i = 0; i < clen && i < 8; i++) fatname[i] = toupper(arg[0][i]);
-            // } else {
-            //     for (int i = 0; i < dot && i < 8; i++) fatname[i] = toupper(arg[0][i]);
-            //     for (int i = dot + 1, j = 8; i < clen && j < 11; i++, j++) fatname[j] = toupper(arg[0][i]);
-            // }
-            // int found = 0;
-            // for (int i = 0; i < n; i++) {
-            //     if (strncmp(entries[i].name, fatname, 11) == 0 && (entries[i].attr & 0x10) == 0) {
-            //         found = 1;
-            //         break;
-            //     }
-            // }
-            // if (found) {
-            //     load_and_run_binary(arg[0], current_disk, current_dir_cluster);
-            //     return;
-            // }
+        else if (strcmp(arg[0], "ping") == 0) {
+            if (count < 2) { kprint("Usage: ping <a.b.c.d>\n"); return; }
+            uint8_t ip_parts[4] = {0};
+            char ipcopy[32]; strncpy(ipcopy, arg[1], 31); ipcopy[31]=0;
+            char *tok = strtok(ipcopy, "."); int idx=0;
+            while (tok && idx<4) { ip_parts[idx++] = atoi(tok); tok = strtok(NULL, "."); }
+            if (idx!=4) { kprint("Bad IP format\n"); return; }
+            struct net_device *dev = net_get_iface(0);
+            if (!dev) { kprint("No network interface\n"); return; }
 
-            if (!startsWith(arg[0], "#")) {
+            /* --- simple ARP resolution --- */
+            uint8_t target_mac[6]; int mac_known=0;
+            /* if pinging own IP -> use own MAC */
+            uint32_t dst_ip = ((uint32_t)ip_parts[0]<<24)|((uint32_t)ip_parts[1]<<16)|((uint32_t)ip_parts[2]<<8)|ip_parts[3];
+            if(dst_ip == dev->ip_addr){ memcpy(target_mac, dev->mac,6); mac_known=1; }
+
+            if(!mac_known){
+                uint8_t arp_req[14+28]; /* ETH+ARP */
+                /* Ethernet */
+                for(int i=0;i<6;i++) arp_req[i]=0xff; /* dest broadcast */
+                for(int i=0;i<6;i++) arp_req[6+i]=dev->mac[i];
+                arp_req[12]=0x08; arp_req[13]=0x06; /* ARP */
+                /* ARP payload */
+                uint8_t *arp=arp_req+14;
+                arp[0]=0x00; arp[1]=0x01; /* HTYPE Ethernet */
+                arp[2]=0x08; arp[3]=0x00; /* PTYPE IPv4 */
+                arp[4]=6; arp[5]=4;       /* HLEN, PLEN */
+                arp[6]=0x00; arp[7]=0x01; /* OPCODE request */
+                memcpy(&arp[8], dev->mac,6);                    /* sender MAC */
+                arp[14]=(dev->ip_addr>>24)&0xFF; arp[15]=(dev->ip_addr>>16)&0xFF; arp[16]=(dev->ip_addr>>8)&0xFF; arp[17]=dev->ip_addr&0xFF; /* sender IP */
+                memset(&arp[18],0,6);                            /* target MAC */
+                arp[24]=ip_parts[0]; arp[25]=ip_parts[1]; arp[26]=ip_parts[2]; arp[27]=ip_parts[3]; /* target IP */
+                dev->send(dev, arp_req, sizeof(arp_req));
+
+                /* wait for ARP reply up to ~200k iterations */
+                for(int t=0;t<200000 && !mac_known;t++){
+                    net_poll_once();
+                    uint8_t *pkt; uint16_t plen;
+                    while(net_dequeue_frame(&pkt,&plen)){
+                        if(plen<42) continue;
+                        /* Check ARP */
+                        if(pkt[12]==0x08 && pkt[13]==0x06){
+                            uint8_t *a=pkt+14;
+                            if(a[6]==0x00 && a[7]==0x02){ /* reply */
+                                /* compare target IP (our IP) and sender IP (dst_ip) */
+                                uint32_t sip=(a[14]<<24)|(a[15]<<16)|(a[16]<<8)|a[17];
+                                if(sip==dst_ip){ memcpy(target_mac, &a[8],6); mac_known=1; break; }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if(!mac_known){ kprint("ARP resolution failed\n"); return; }
+
+            kprintf("Pinging to %s...\n", arg[1]);
+            #define PING_DATA_SIZE 32
+            int sent=0, recv=0;
+            for(int seq=1; seq<=4; seq++){
+                uint8_t frame[14+20+8+PING_DATA_SIZE];
+                /* Ethernet */
+                uint8_t *eth=frame;
+                for(int i=0;i<6;i++) eth[i]=target_mac[i];
+                for(int i=0;i<6;i++) eth[6+i]=dev->mac[i];
+                eth[12]=0x08; eth[13]=0x00;
+                /* IP */
+                uint8_t *ip=frame+14; memset(ip,0,20); ip[0]=0x45;
+                uint16_t tot=20+8+PING_DATA_SIZE; ip[2]=tot>>8; ip[3]=tot&0xff;
+                ip[8]=64; ip[9]=1;
+                ip[12]=(dev->ip_addr>>24)&0xFF; ip[13]=(dev->ip_addr>>16)&0xFF;
+                ip[14]=(dev->ip_addr>>8)&0xFF; ip[15]=dev->ip_addr&0xFF;
+                ip[16]=ip_parts[0]; ip[17]=ip_parts[1]; ip[18]=ip_parts[2]; ip[19]=ip_parts[3];
+                uint32_t s=0; for(int i=0;i<20;i+=2) s+= (ip[i]<<8)|ip[i+1]; while(s>>16) s=(s&0xFFFF)+(s>>16); s=~s; ip[10]=s>>8; ip[11]=s&0xFF;
+                /* ICMP */
+                uint8_t *icmp=ip+20; icmp[0]=8; icmp[1]=0; icmp[4]=0x12; icmp[5]=0x34; icmp[6]=seq>>8; icmp[7]=seq&0xFF;
+                for(int i=0;i<PING_DATA_SIZE;i++) icmp[8+i]=i;
+                s=0; for(int i=0;i<8+PING_DATA_SIZE;i+=2) s+= (icmp[i]<<8)|icmp[i+1]; while(s>>16) s=(s&0xFFFF)+(s>>16); s=~s; icmp[2]=s>>8; icmp[3]=s&0xFF;
+                dev->send(dev, frame, sizeof(frame)); sent++;
+
+                /* wait up to ~500k iterations */
+                int got=0;
+                for(int t=0;t<500000 && !got;t++){
+                    net_poll_once();
+                    uint8_t *pkt; uint16_t plen;
+                    while(net_dequeue_frame(&pkt,&plen)){
+                        if(plen<42) continue; /* min */
+                        if(pkt[12]!=0x08 || pkt[13]!=0x00) continue; /* IPv4 */
+                        uint8_t *ip2=pkt+14; if(ip2[9]!=1) continue; /* ICMP */
+                        uint8_t *ic2=ip2+ (ip2[0]&0x0F)*4;
+                        if(ic2[0]==0 && ic2[1]==0){ /* Echo reply */
+                            if(ic2[4]==0x12 && ic2[5]==0x34 && ic2[6]==(seq>>8) && ic2[7]==(seq&0xFF)){
+                                uint8_t ttl=ip2[8];
+                                kprintf("Answer from %s: byte=%d ttl=%d\n", arg[1], PING_DATA_SIZE, ttl);
+                                recv++; got=1; break;
+                            }
+                        }
+                    }
+                }
+                if(!got) kprintf("Request timeout for seq %d\n", seq);
+            }
+            kprintf("Success:\n    packet loss: %d%% (sent: %d get: %d)\n", (100*(sent-recv))/sent, sent, recv);
+            return;
+        }
+        else if (strcmp(arg[0], "clear") == 0)
+        {
+            kclear();
+            return;
+        }
+        else {
+            /* --------------------------------------------------------------
+             * 1) Handle assignment   BIN=<something>                       
+             * -----------------------------------------------------------*/
+            if (startsWith(arg[0], "BIN=")) {
+                /* copy everything after "BIN=" */
+                strncpy(bin_path, arg[0] + 4, sizeof(bin_path) - 1);
+                bin_path[sizeof(bin_path) - 1] = 0;
+                /* Ensure path ends with slash/backslash for easy concat */
+                size_t bl = strlen(bin_path);
+                if (bl && bin_path[bl-1] != '/' && bin_path[bl-1] != '\\') {
+                    if (bl < sizeof(bin_path) - 1) { bin_path[bl] = '/'; bin_path[bl+1] = 0; }
+                }
+                kprintf("BIN path set to %s\n", bin_path);
+                return;
+            }
+
+            /* --------------------------------------------------------------
+             * 2) Try to launch the command as .FEX executable               
+             * -----------------------------------------------------------*/
+            char fullpath[300]; fullpath[0] = 0;
+
+            /* Absolute path supplied? */
+            if (startsWith(arg[0], "CDROM:/") || startsWith(arg[0], "cdrom:/") || (arg[0][1] == ':' && (arg[0][2]=='\\' || arg[0][2]=='/'))) {
+                strcat(fullpath, arg[0]);
+            } else if (bin_path[0]) {
+                /* Prepend BIN path */
+                strcat(fullpath, bin_path);
+                strcat(fullpath, arg[0]);
+            } else {
+                /* Use as-is (relative to current FAT directory) */
+                strcat(fullpath, arg[0]);
+            }
+
+            /* Append .FEX if no dot present */
+            if (!strchr(fullpath, '.')) {
+                strcat(fullpath, ".FEX");
+            }
+
+            int launched = 0;
+            if (startsWith(fullpath, "CDROM:/") || startsWith(fullpath, "cdrom:/")) {
+                launched = run_fex_iso(fullpath);
+            } else {
+                launched = run_fex_fat(fullpath);
+            }
+
+            if (!launched && !startsWith(arg[0], "#")) {
                 kprintf("<(0c)>%s: command or executable file not found<(0f)>\n", arg[0]);
             }
             return;
@@ -1607,29 +1750,23 @@ void load_and_run_binary(const char* filename, uint32_t disk, uint32_t dir_clust
 
         if (phdr.p_type == PT_LOAD) {
             // Выделяем память для сегмента
-            void* mem = malloc(phdr.p_memsz);
-            if (!mem) {
-                kprint("Out of memory\n");
-                return;
-            }
-
-            // Читаем содержимое сегмента
-            if (fat32_read_file(disk, cluster, (uint8_t*)mem, phdr.p_filesz) != phdr.p_filesz) {
+            uint8_t *dest = (uint8_t*)phdr.p_vaddr;
+            if (fat32_read_file_data(disk, filename, dest, phdr.p_filesz, phdr.p_offset) != (int)phdr.p_filesz) {
                 kprint("Error reading segment\n");
-                mfree(mem);
                 return;
             }
-
-            // Очищаем оставшуюся память (bss секция)
             if (phdr.p_memsz > phdr.p_filesz) {
-                memset((uint8_t*)mem + phdr.p_filesz, 0, phdr.p_memsz - phdr.p_filesz);
+                memset(dest + phdr.p_filesz, 0, phdr.p_memsz - phdr.p_filesz);
             }
         }
     }
 
     // Запускаем программу
     void (*entry_point)(void) = (void (*)(void))ehdr.e_entry;
+    kprintf("<run_fex_fat> entering %s at 0x%08x\n", filename, (uint32_t)ehdr.e_entry);
     entry_point();
+    kprintf("<run_fex_fat> returned from entry() of %s\n", filename);
+    /* We normally never return from FEX program; if it does, simply continue */
 }
 
 // Вспомогательная функция: создать директории по пути (если не существуют)
@@ -1914,4 +2051,59 @@ static int cmpiso_file(const char* src, const char* dst) {
     mfree(buf_iso); mfree(buf_fat);
     if (remaining==0) kprintf("cmp: files are identical (%u bytes)\n", iso_size);
     return 0;
+}
+
+/* Helpers to run .FEX (ELF) executables */
+static int run_fex_fat(const char *path) {
+    uint32_t dir_cluster;
+    char fname[13];
+    if (ensure_fat32_path(current_disk, path, &dir_cluster, fname) != 0) {
+        return 0; /* not found */
+    }
+    load_and_run_binary(fname, current_disk, dir_cluster);
+    return 1;
+}
+
+/* --------------------------------------------------------------
+ * ISO9660-based .FEX execution helper                            
+ * -----------------------------------------------------------*/
+static int run_fex_iso(const char *path) {
+    uint32_t lba, size;
+    if (iso9660_find(path, &lba, &size) != 0) return 0;
+    uint8_t *buf = malloc(size);
+    if (!buf) { kprint("Out of memory\n"); return 0; }
+    if (iso9660_read(path, buf, size) != (int)size) { mfree(buf); return 0; }
+
+    elf32_ehdr_t *eh = (elf32_ehdr_t*)buf;
+    if (eh->e_ident[0] != ELFMAG0 || eh->e_ident[1] != ELFMAG1 || eh->e_ident[2] != ELFMAG2 || eh->e_ident[3] != ELFMAG3) { mfree(buf); return 0; }
+    if (eh->e_ident[4] != ELFCLASS32 || eh->e_type != ET_EXEC) { mfree(buf); return 0; }
+
+    /* Load program segments */
+    elf32_phdr_t *ph = (elf32_phdr_t*)((uint8_t*)buf + eh->e_phoff);
+    for (int i = 0; i < eh->e_phnum; i++, ph++) {
+        if (ph->p_type != PT_LOAD) continue;
+        uint8_t *dst = (uint8_t*)ph->p_vaddr;
+        memcpy(dst, (uint8_t*)buf + ph->p_offset, ph->p_filesz);
+        if (ph->p_memsz > ph->p_filesz) memset(dst + ph->p_filesz, 0, ph->p_memsz - ph->p_filesz);
+    }
+
+    void (*entry)(void) = (void (*)(void))eh->e_entry;
+    kprintf("<run_fex_iso> entering %s at 0x%08x\n", path, (uint32_t)eh->e_entry);
+    entry();
+    kprintf("<run_fex_iso> returned from entry() of %s\n", path);
+    /* We normally never return from FEX program; if it does, simply continue */
+    mfree(buf);
+    return 1;
+}
+
+/* Safe append of zero-terminated src to dest with buffer length limit */
+static void str_append(char *dest, const char *src, size_t buf_size)
+{
+    size_t dlen = strlen(dest);
+    size_t i = 0;
+    while (src[i] && dlen + i < buf_size - 1) {
+        dest[dlen + i] = src[i];
+        i++;
+    }
+    dest[dlen + i] = '\0';
 }

@@ -18,7 +18,11 @@ static int iso9660_namecmp(const char* iso_name, size_t iso_len, const char* pat
     size_t path_len = strlen(path);
     if (iso_len < path_len) return 0;
     for (size_t i = 0; i < path_len; ++i) {
-        if (iso_name[i] != path[i]) return 0;
+        char a = iso_name[i];
+        char b = path[i];
+        if (a >= 'a' && a <= 'z') a -= ('a' - 'A');
+        if (b >= 'a' && b <= 'z') b -= ('a' - 'A');
+        if (a != b) return 0;
     }
     // Проверяем, что дальше в iso_name идёт ';' или конец
     if (iso_len > path_len && iso_name[path_len] != ';') return 0;
@@ -143,6 +147,21 @@ int iso9660_read(const char* path, void* buffer, uint32_t max_size) {
     }
     // Возвращаем действительное количество прочитанных байт
     uint32_t bytes = sectors_to_read * ISO9660_SECTOR_SIZE;
+
+    /* --------------------------------------------------------------
+     * If the caller's buffer is large enough and the file size is
+     * NOT a multiple of the sector size, we still have to copy the
+     * remaining tail ( < 2048 bytes ) that sits in the next sector.  
+     * -----------------------------------------------------------*/
+    if (bytes < size && bytes < max_size) {
+        uint8_t tail_buf[ISO9660_SECTOR_SIZE];
+        if (atapi_read_device(iso9660_atapi_devnum, lba + sectors_to_read, 1, tail_buf) != 0) return -2;
+        uint32_t remain = size - bytes;                     // bytes we still need to return ( < 2048 )
+        if (remain > max_size - bytes) remain = max_size - bytes; // honour max_size limit
+        memcpy((uint8_t*)buffer + bytes, tail_buf, remain);
+        bytes += remain;
+    }
+
     if (bytes > size) bytes = size;
     return bytes;
 }

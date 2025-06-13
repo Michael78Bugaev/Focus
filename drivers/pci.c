@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <vga.h>
 #include <pci.h>
+#include <net_if.h>
 
 // Read a 32-bit value from the PCI configuration space
 uint32_t pci_config_read(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset) {
@@ -26,9 +27,39 @@ void pci_enumerate(void) {
                 uint8_t class = (class_data >> 24) & 0xFF;
                 uint8_t subclass = (class_data >> 16) & 0xFF;
                 uint8_t prog_if = (class_data >> 8) & 0xFF;
-                kprintf("Found PCI [%d:%d:%d] vendor=0x%04x device=0x%04x class=0x%02x subclass=0x%02x prog_if=0x%02x\n",
+                kprintf("PCI [%d:%d:%d] ven=0x%04x dev=0x%04x cl=0x%02x subl=0x%02x progif=0x%02x\n",
                         bus, device, function, vendor, device_id, class, subclass, prog_if);
+
+                /* notify network stack about this device */
+                net_probe_pci_device(bus, device, function, vendor, device_id);
             }
         }
     }
+}
+
+uint32_t pci_read_config32(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset)
+{
+    return pci_config_read(bus, device, function, offset);
+}
+
+uint16_t pci_read_config16(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset)
+{
+    uint32_t v = pci_config_read(bus, device, function, offset & 0xFC);
+    if (offset & 2) return (v >> 16) & 0xFFFF;
+    else return v & 0xFFFF;
+}
+
+void pci_write_config16(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset, uint16_t value)
+{
+    uint32_t address = (uint32_t)((1U << 31)
+                                 | ((uint32_t)bus << 16)
+                                 | ((uint32_t)device << 11)
+                                 | ((uint32_t)function << 8)
+                                 | (offset & 0xFC));
+    outportl(0xCF8, address);
+    uint32_t shift = (offset & 2) ? 16 : 0;
+    uint32_t current = inportl(0xCFC);
+    current &= ~(0xFFFFu << shift);
+    current |= ((uint32_t)value << shift);
+    outportl(0xCFC, current);
 } 

@@ -75,3 +75,9 @@ void apic_timer_init(uint32_t initial_count, uint32_t mode, uint8_t vector) {
     // Set the initial count (counter starts decrementing)
     apic_write(APIC_TIMER_INIT_CNT, initial_count);
 } 
+
+void apic_timer_sleep(uint32_t ms) {
+    uint32_t initial_count = 1193180 / 1000 * ms;
+    apic_write(APIC_TIMER_INIT_CNT, initial_count);
+    apic_write(APIC_LVT_TIMER, 0x00000000);
+}

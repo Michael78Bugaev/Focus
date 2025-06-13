@@ -1,10 +1,13 @@
 # Focus operating system init.fcs script like init in linux
 
+BIN=CDROM:/focus/bin/
 pause
+
+
 echo <(05)>FOCUS<(07)> Operating System v1.5 <(0f)><(endl)><(0a)>Copyright MIT v3.0 License<(0f)>
 echo Created by Michael Bugaev<(endl)>
-echo - FCSASM Compiler
+#echo - FCSASM Compiler
 echo - FAT32 File System<(endl)>
 echo Project: <(0b)>https://github.com/Michael78Bugaev/Focus/tree/master<(0f)> <(endl)>Written in C and Assembly. Enjoy!
-#sh
+sh
 #echo End of init.fsc

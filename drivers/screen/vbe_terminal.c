@@ -4966,3 +4966,7 @@ void print_bmp16(uint8_t* bmp_data, uint32_t width, uint32_t height, uint32_t x,
         }
     }
 }
+
+void vbe_pixel(int x, int y, int color) {
+    draw_pixel(backbuf, x, y, color);
+}

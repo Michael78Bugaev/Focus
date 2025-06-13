@@ -20,6 +20,7 @@ void kentr(uint32_t magic, struct multiboot_info *mbi) {
     qemu_debug_printf("VBE width: %d, height: %d\n", mbi->framebuffer_width, mbi->framebuffer_height);
     init_gdt();
     init_idt();
+    init_paging();
     qemu_debug_printf("IDT initialized\n");
     // Initialize local APIC and APIC timer instead of PIT
     apic_init();
@@ -36,6 +37,10 @@ void kentr(uint32_t magic, struct multiboot_info *mbi) {
     atapi_init();
     shell_execute("fatmount");
     shell_execute("isomount 2");
+    kprintf("flib: kprintf at 0x%08x\n", &kprintf);
+    kprintf("flib: kprint at 0x%08x\n", &kprint);
+
+    net_init();
     int bmp;
     uint8_t *bmp_data = malloc(219 * 87);
     if (!bmp_data)
@@ -54,14 +59,12 @@ void kentr(uint32_t magic, struct multiboot_info *mbi) {
         }
     }
     kprintf("Starting /focus/init.fcs...\n");
-    //vbe_swap();
     shell_execute_fsc("cdrom:/focus/init.fcs");
+
     if (bmp > 0) print_bmp16(bmp_data, 219, 87, 800 - 230, 5);
     mfree(bmp_data);
-    shell_execute("sh");
-    //if (bmp > 0) print_bmp16(bmp_data, 219, 87, 800 - 230, 5);
+
     for (;;);
-    //shell_execute("sh");
 }
 
 void print_prompt() {
@@ -70,7 +73,7 @@ void print_prompt() {
     if (current_dir_cluster == root_dir_first_cluster) {
         kprint("0:\\>");
     } else {
-        char path[8][9]; // до 8 вложенных директорий
+        char path[8][9]; 
         int depth = build_path(current_dir_cluster, path, 8);
         kprint("0:");
         for (int i = depth - 1; i >= 0; i--) {
