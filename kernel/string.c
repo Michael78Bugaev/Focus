@@ -645,19 +645,19 @@ bool contain(const char *str, char contain)
     return false;  
 }
 
+void *memcpy(const void *src, void *dest, uint32_t n)
+{
+    const uint8_t *s = (const uint8_t*)src;
+    uint8_t *d = (uint8_t*)dest;
+    for (uint32_t i = 0; i < n; i++) d[i] = s[i];
+    return dest;
+}
+
 void memset(void *dest, char val, uint32_t count)
 {
     char *temp = (char*) dest;
     for (; count != 0; count --){
         *temp++ = val;
-    }
-}
-
-void memcpy(const uint8_t *src, uint8_t *dest, uint32_t bytes)
-{
-	int i;
-    for (i = 0; i < bytes; i++) {
-        *(dest + i) = *(src + i);
     }
 }
 

@@ -108,7 +108,9 @@ $(LIBFOCUS_A): $(IMPORTS_O) $(CRT0_O)
 # Rule: .c -> .fex (ELF) using user.ld and libfocus.a
 $(APPS_DIR)/%.fex: $(APPS_DIR)/%.c $(LIBFOCUS_A) user.ld | $(BUILD_DIR)
 	@echo " APP		" $@
-	@$(CC) -m32 -ffreestanding -fno-pic -no-pie -nostdlib -T user.ld -o $@ $< $(LIBFOCUS_A)
+	@$(CC) -m32 -O3 -ffreestanding -fno-omit-frame-pointer -fno-pic -no-pie -nostdlib \
+	   -mpreferred-stack-boundary=2 -mincoming-stack-boundary=2 \
+	   -mno-stackrealign -T user.ld -o $@ $< $(LIBFOCUS_A)
 
 .PHONY: apps
 apps: $(LIBFOCUS_A) $(APP_BINS)

@@ -1,3 +1,13 @@
+/*
+ * APIC timer driver.
+ *
+ *  – uses the local APIC timer (LVT Timer) to generate interrupts.
+ *  – uses the APIC timer divide configuration to set the timer frequency.
+ *  – uses the APIC timer initial count register to set the timer period.
+ *  – uses the APIC timer current count register to read the timer value.
+ *  – uses the APIC timer interrupt register to acknowledge the interrupt.
+ */
+
 #include <stdint.h>
 #include <ports.h>
 #include <idt.h>
@@ -56,7 +66,7 @@ void apic_timer_handler(struct InterruptRegisters *regs) {
         cursor_blink = !cursor_blink;
         draw_cursor(cursor_blink);
     }
-    if (apic_ticks % 9 == 0) {
+    if (apic_ticks % 10 == 0) {
         vbe_swap();
     }
 }

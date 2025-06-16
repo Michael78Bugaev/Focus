@@ -1,9 +1,16 @@
 global _start
 extern main
 
-; very small startup code for FocusOS FEX
-; We assume flat 32-bit, interrupts enabled, stack already valid.
 _start:
-    mov esp, 0x003FF000 ; set a private stack (top at 4MB-4K)
-    call main        ; transfer control
-    ret               ; give control back to the shell when main exits 
+    push    ebp
+    mov     ebp, esp
+    and     esp, 0xFFFFFFF0   ; выравниваем стек на 16
+    sub     esp, 8            ; shadow space для GCC (как в SysV ABI)
+
+    call    main              ; вызываем функцию пользователя
+
+    add     esp, 8            ; убираем shadow space
+    mov     esp, ebp
+    pop     ebp
+
+    ret                       ; вернуть управление оболочке (ядру)

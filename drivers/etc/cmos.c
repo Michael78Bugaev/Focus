@@ -1,3 +1,12 @@
+/*
+ * CMOS driver.
+ *
+ *  – uses the CMOS address and data ports to read and write CMOS registers.
+ *  – uses the CMOS registers to read and write the date and time.
+ *  – uses the CMOS registers to read and write the system clock.
+ *  – uses the CMOS registers to read and write the system timer.
+ */
+
 #include <stdint.h>
 
 #define CMOS_ADDRESS 0x70

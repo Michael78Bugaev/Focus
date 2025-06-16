@@ -29,7 +29,11 @@ int fat32_mount(uint8_t drive) {
     if (fat32_bpb.sectors_per_cluster == 0) {
         fat32_bpb.sectors_per_cluster = 1;
     }
-
+    if (fat32_bpb.table_size_32 == 0)
+    {
+        kprintf("FAT32 not found on disk. Use 'fatmkfs' to create clear filesystem.");
+        return -2;
+    }
     sectors_per_fat = fat32_bpb.table_size_32;
     fat_start = fat32_bpb.reserved_sector_count;
     cluster_begin_lba = fat_start + fat32_bpb.table_count * sectors_per_fat;
@@ -180,51 +184,62 @@ int fat32_resolve_path(uint8_t drive, const char* path, uint32_t* target_cluster
                 // Если мы в корневом каталоге, то остаёмся в нём
                 return -3;
             }
-            fat32_dir_entry_t *entries = malloc(16 * sizeof(fat32_dir_entry_t));
+            fat32_dir_entry_t *entries = malloc(32 * sizeof(fat32_dir_entry_t));
             if (!entries) {
                 kprintf("<(0c)>Error allocating memory for directory entries<(0f)>\n");
                 return -1;
             }
-            int count = fat32_read_dir(drive, *target_cluster, entries, 16);
+            int count = fat32_read_dir(drive, *target_cluster, entries, 32);
             for (int j = 0; j < count; j++) {
-                if (strcmp(entries[j].name, "..") == 0) {
-                    *target_cluster = entries[j].first_cluster_low | (entries[j].first_cluster_high << 16);
+                /* имя в каталоге не нуль-терминируется, сравниваем первые два символа */
+                if (entries[j].name[0] == '.' && entries[j].name[1] == '.') {
+                    uint32_t plc = ((uint32_t)entries[j].first_cluster_high << 16) | entries[j].first_cluster_low;
+                    if (plc == 0) plc = root_dir_first_cluster; /* по спецификации 0 указывает на корень */
+                    *target_cluster = plc;
                     break;
                 }
             }
             mfree(entries);
         } else {
             // Обычная директория
-            fat32_dir_entry_t *entries = malloc(16 * sizeof(fat32_dir_entry_t));
+            fat32_dir_entry_t *entries = malloc(32 * sizeof(fat32_dir_entry_t));
             if (!entries) {
                 kprintf("<(0c)>Error allocating memory for directory entries<(0f)>\n");
                 return -1;
             }
-            int count = fat32_read_dir(drive, *target_cluster, entries, 16);
+            int count = fat32_read_dir(drive, *target_cluster, entries, 32);
             int found = 0;
             for (int j = 0; j < count; j++) {
-                // Подготовка component к формату 8.3
                 char fatname[11];
+                memset(fatname, ' ', 11);
+
                 int clen = strlen(component);
                 int dot = -1;
                 for (int i = 0; i < clen; i++) {
                     if (component[i] == '.') { dot = i; break; }
                 }
-                memset(fatname, ' ', 11);
+
                 if (dot == -1) {
+                    /* только имя */
                     for (int i = 0; i < clen && i < 8; i++)
                         fatname[i] = my_toupper(component[i]);
                 } else {
-                    for (int i = dot + 1, j = 8; i < clen && j < 11; i++, j++)
-                        fatname[j] = my_toupper(component[i]);
+                    /* имя до точки */
+                    for (int i = 0; i < dot && i < 8; i++)
+                        fatname[i] = my_toupper(component[i]);
+                    /* расширение после точки */
+                    for (int i = dot + 1, k = 8; i < clen && k < 11; i++, k++)
+                        fatname[k] = my_toupper(component[i]);
                 }
+
                 int match = 1;
                 for (int k = 0; k < 11; k++) {
                     if (fatname[k] != entries[j].name[k]) { match = 0; break; }
                 }
+
                 if (match) {
                     if (entries[j].attr & 0x10) {
-                        *target_cluster = entries[j].first_cluster_low | (entries[j].first_cluster_high << 16);
+                        *target_cluster = ((uint32_t)entries[j].first_cluster_high << 16) | entries[j].first_cluster_low;
                         found = 1;
                         break;
                     }
@@ -232,6 +247,7 @@ int fat32_resolve_path(uint8_t drive, const char* path, uint32_t* target_cluster
                     return -2; // Это не директория
                 }
             }
+
             if (!found) {
                 mfree(entries);
                 return -1; // Директория не найдена

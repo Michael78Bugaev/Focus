@@ -13,7 +13,7 @@
 #include <paging.h>
 #include <mem.h>
 
-static uint32_t page_directory[1024] __attribute__((aligned(4096)));
+uint32_t page_directory[1024] __attribute__((aligned(4096)));
 
 void init_paging(void)
 {

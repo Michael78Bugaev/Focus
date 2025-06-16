@@ -1,3 +1,12 @@
+/*
+ * Memory management driver.
+ *
+ *  – uses the dynamic memory area to allocate and free memory.
+ *  – uses the dynamic memory area to merge adjacent free blocks.
+ *  – uses the dynamic memory area to find the best (smallest unused) block.
+ *  – uses the dynamic memory area to return a pointer to the allocated memory.
+ */
+
 #include <stdint.h>
 #include <mem.h>
 #include <stdio.h>

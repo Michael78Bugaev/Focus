@@ -9,7 +9,7 @@
 #define ATAPI_CMD_IDENTIFY_PACKET 0xA1
 #define ATAPI_CMD_READ_12 0xA8
 #define ATAPI_SECTOR_SIZE 2048
-#define ATAPI_TIMEOUT 1000000
+#define ATAPI_TIMEOUT 1000000000
 #define MAX_ATAPI_DEVICES 4
 
 static struct atapi_device g_atapi_devs[MAX_ATAPI_DEVICES] = {
@@ -164,12 +164,12 @@ int atapi_read_device(int devnum, uint32_t lba, uint16_t count, void* buffer) {
         // Чтение данных
         insw(io, (uint8_t*)buffer + i * ATAPI_SECTOR_SIZE, ATAPI_SECTOR_SIZE / 2);
         // Debug: show first 8 bytes of the first sector read
-        if (i == 0) {
-            uint8_t* dbgptr = (uint8_t*)buffer + i * ATAPI_SECTOR_SIZE;
-            qemu_debug_printf("ATAPI read lba %u first8: ", lba + i);
-            for (int dbg = 0; dbg < 8; ++dbg) qemu_debug_printf("%02X ", dbgptr[dbg]);
-            qemu_debug_printf("\n");
-        }
+        // if (i == 0) {
+        //     uint8_t* dbgptr = (uint8_t*)buffer + i * ATAPI_SECTOR_SIZE;
+        //     qemu_debug_printf("ATAPI read lba %u first8: ", lba + i);
+        //     for (int dbg = 0; dbg < 8; ++dbg) qemu_debug_printf("%02X ", dbgptr[dbg]);
+        //     qemu_debug_printf("\n");
+        // }
 
         // Ждать завершения (BSY=0)
         timeout = ATAPI_TIMEOUT;
