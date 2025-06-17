@@ -3,6 +3,7 @@
 #include <mem.h>
 #include <string.h>
 #include <vga.h>
+#include <paging.h>
 
 #define FONT_WIDTH 8
 #define FONT_HEIGHT 16
@@ -4606,7 +4607,7 @@ static const uint8_t font8x16[256][16] = {
 	0x00, /* 00000000 */
 	0x00, /* 00000000 */
 
-	/* 255 0xff ' ' */
+	/* 255 0xff ' ' */
 	0x00, /* 00000000 */
 	0x00, /* 00000000 */
 	0x00, /* 00000000 */
@@ -4644,6 +4645,9 @@ void vbe_init(struct multiboot_info *mbi) {
     width = mbi->framebuffer_width;
     height = mbi->framebuffer_height;
     bpp = mbi->framebuffer_bpp;
+
+	disable_cache_for_region((uint32_t)(uintptr_t)fb, pitch * height);
+	
     qemu_debug_printf("before malloc\n");
     backbuf = malloc(width * height);
     if (!backbuf) {

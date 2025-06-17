@@ -220,62 +220,30 @@ void strnone(char *str)
 }
 
 char **splitString(const char *str, int *count) {
-     // Сначала подсчитаем количество слов
-     int n = 0;
-     const char *ptr = str;
-     while (*ptr) {
-         // Пропускаем пробелы
-         while (*ptr == ' ') {
-             ptr++;
-         }
-         if (*ptr) {
-             n++; // Нашли слово
-             // Пропускаем само слово
-             while (*ptr && *ptr != ' ') {
-                 ptr++;
-             }
-         }
-     }
+    /* Статический буфер и массив указателей – одна аллокация на всё время
+       работы, перезаписывается при каждом вызове.  
+       Ограничения: максимум 64 слов по 64 байта каждое. */
+    static char words_buf[64][64];
+    static char *result[64];
 
-     // Выделяем память для массива строк
-     char **result = malloc(n * sizeof(char *));
-     if (!result) {
-         return NULL; // Ошибка выделения памяти
-     }
+    int n = 0;
+    const char *ptr = str;
 
-     // Заполняем массив словами
-     int index = 0;
-     ptr = str;
-     while (*ptr) {
-         // Пропускаем пробелы
-         while (*ptr == ' ') {
-             ptr++;
-         }
-         if (*ptr) {
-             const char *start = ptr;
-             // Находим конец слова
-             while (*ptr && *ptr != ' ') {
-                 ptr++;
-             }
-             // Выделяем память для слова и копируем его
-             int length = ptr - start;
-             result[index] = malloc((length + 1) * sizeof(char));
-             if (!result[index]) {
-                 // Освобождаем ранее выделенную память в случае ошибки
-                 for (int j = 0; j < index; j++) {
-                     mfree(result[j]);
-                 }
-                 mfree(result);
-                 return NULL; // Ошибка выделения памяти
-             }
-             strncpy(result[index], start, length);
-             result[index][length] = '\0'; // Завершаем строку нулевым символом
-             index++;
-         }
-     }
+    while (*ptr && n < 64) {
+        while (*ptr == ' ') ptr++;          /* пропуск пробелов */
+        if (!*ptr) break;
 
-     *count = n; // Возвращаем количество найденных слов
-     return result;
+        char *dst = words_buf[n]; int len = 0;
+        while (*ptr && *ptr != ' ' && len < 63) {
+            dst[len++] = *ptr++;
+        }
+        dst[len] = 0;
+        result[n] = dst;
+        n++;
+    }
+
+    *count = n;
+    return result;
 }
 
 size_t strnlen(const char *s, size_t maxlen) {

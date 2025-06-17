@@ -73,8 +73,8 @@ void print_prompt() {
     if (current_dir_cluster == root_dir_first_cluster) {
         kprint("0:\\>");
     } else {
-        char path[8][9]; 
-        int depth = build_path(current_dir_cluster, path, 8);
+        char path[32][9];
+        int depth = build_path(current_dir_cluster, path, 32);
         kprint("0:");
         for (int i = depth - 1; i >= 0; i--) {
             kprint("\\");

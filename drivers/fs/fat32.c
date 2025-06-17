@@ -7,6 +7,11 @@ uint32_t fat_start, cluster_begin_lba, sectors_per_fat, root_dir_first_cluster;
 static uint8_t fat_buffer[512];
 uint32_t current_dir_cluster;
 
+/* предварительный прототип, чтобы исключить implicit declaration при использовании ниже */
+static int fat32_find_entry_by_name(uint8_t drive, uint32_t dir_cluster,
+                                    const char fatname[11],
+                                    fat32_dir_entry_t *out);
+
 // Локальная функция для перевода символа в верхний регистр
 static char my_toupper(char c) {
     if (c >= 'a' && c <= 'z') return c - ('a' - 'A');
@@ -201,58 +206,25 @@ int fat32_resolve_path(uint8_t drive, const char* path, uint32_t* target_cluster
             }
             mfree(entries);
         } else {
-            // Обычная директория
-            fat32_dir_entry_t *entries = malloc(32 * sizeof(fat32_dir_entry_t));
-            if (!entries) {
-                kprintf("<(0c)>Error allocating memory for directory entries<(0f)>\n");
-                return -1;
-            }
-            int count = fat32_read_dir(drive, *target_cluster, entries, 32);
-            int found = 0;
-            for (int j = 0; j < count; j++) {
-                char fatname[11];
-                memset(fatname, ' ', 11);
-
-                int clen = strlen(component);
-                int dot = -1;
-                for (int i = 0; i < clen; i++) {
-                    if (component[i] == '.') { dot = i; break; }
-                }
-
-                if (dot == -1) {
-                    /* только имя */
-                    for (int i = 0; i < clen && i < 8; i++)
-                        fatname[i] = my_toupper(component[i]);
-                } else {
-                    /* имя до точки */
-                    for (int i = 0; i < dot && i < 8; i++)
-                        fatname[i] = my_toupper(component[i]);
-                    /* расширение после точки */
-                    for (int i = dot + 1, k = 8; i < clen && k < 11; i++, k++)
-                        fatname[k] = my_toupper(component[i]);
-                }
-
-                int match = 1;
-                for (int k = 0; k < 11; k++) {
-                    if (fatname[k] != entries[j].name[k]) { match = 0; break; }
-                }
-
-                if (match) {
-                    if (entries[j].attr & 0x10) {
-                        *target_cluster = ((uint32_t)entries[j].first_cluster_high << 16) | entries[j].first_cluster_low;
-                        found = 1;
-                        break;
-                    }
-                    mfree(entries);
-                    return -2; // Это не директория
-                }
+            /* --- Формируем FAT 8.3 имя компоненты и ищем его во всём каталоге --- */
+            char fatname[11]; memset(fatname, ' ', 11);
+            int clen = strlen(component), dot = -1;
+            for (int i = 0; i < clen; i++) if (component[i] == '.') { dot = i; break; }
+            if (dot == -1) {
+                for (int i = 0; i < clen && i < 8; i++) fatname[i] = my_toupper(component[i]);
+            } else {
+                for (int i = 0; i < dot && i < 8; i++) fatname[i] = my_toupper(component[i]);
+                for (int i = dot + 1, k = 8; i < clen && k < 11; i++, k++) fatname[k] = my_toupper(component[i]);
             }
 
-            if (!found) {
-                mfree(entries);
-                return -1; // Директория не найдена
+            fat32_dir_entry_t entry;
+            if (!fat32_find_entry_by_name(drive, *target_cluster, fatname, &entry)) {
+                return -1; /* не найдена */
             }
-            mfree(entries);
+            if (entry.attr == 0x20) {
+                return -2; /* это не каталог */
+            }
+            *target_cluster = ((uint32_t)entry.first_cluster_high << 16) | entry.first_cluster_low;
         }
     }
     return 0;
@@ -692,4 +664,53 @@ int fat32_read_file_data(uint8_t drive, const char* path, uint8_t* buf, uint32_t
     mfree(sector);
     mfree(entries);
     return bytes_read;
+}
+
+/* -------------------------------------------------------------------------
+ *  Вспомогательная функция: найти запись каталога c заданным 11-байтовым
+ *  именем (уже в верхнем регистре и пробелами) во ВСЕЙ цепочке кластеров.
+ *  Возвращает 1 при успехе и копирует найденную запись в *out, иначе 0.
+ * -------------------------------------------------------------------------*/
+static int fat32_find_entry_by_name(uint8_t drive, uint32_t dir_cluster,
+                                    const char fatname[11],
+                                    fat32_dir_entry_t *out)
+{
+    uint8_t *sector = malloc(512);
+    if (!sector) { kprintf("<(0c)>fat32_find_entry: OOM<(0f)>\n"); return 0; }
+
+    uint32_t cl = dir_cluster;
+    int found = 0;
+    fat32_dir_entry_t tmp;
+    while (cl < 0x0FFFFFF8) {
+        for (uint8_t s = 0; s < fat32_bpb.sectors_per_cluster; s++) {
+            uint32_t lba = fat32_cluster_to_lba(cl) + s;
+            if (ata_read_sector(drive, lba, sector) != 0) {
+                kprintf("<(0c)>fat32_find_entry: read err lba=%u<(0f)>\n", lba);
+                mfree(sector);
+                return 0;
+            }
+            for (int off = 0; off < 512; off += 32) {
+                fat32_dir_entry_t *ent = (fat32_dir_entry_t*)&sector[off];
+                if (ent->name[0] == 0x00) { /* конец каталога */
+                    mfree(sector);
+                    if (found) { if(out) memcpy(out,&tmp,sizeof(tmp)); }
+                    return found;
+                }
+                if (ent->name[0] == 0xE5) continue; /* удалённая */
+                if (memcmp(ent->name, fatname, 11) == 0) {
+                    /* сохраняем первый найденный; если это каталог – можно сразу вернуть */
+                    if (ent->attr & 0x10) {
+                        if (out) memcpy(out, ent, sizeof(fat32_dir_entry_t));
+                        mfree(sector);
+                        return 1;
+                    }
+                    if (!found) { memcpy(&tmp, ent, sizeof(tmp)); found = 1; }
+                }
+            }
+        }
+        cl = fat32_get_next_cluster(drive, cl);
+    }
+    mfree(sector);
+    if (found && out) memcpy(out,&tmp,sizeof(tmp));
+    return found;
 }

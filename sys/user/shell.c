@@ -14,6 +14,7 @@
 #include <net_if.h>
 #include <stddef.h>
 #include "elf_loader.h"
+#include <paging.h>
 
 #define USER_STACK_SIZE  0x00010000u /* 64 KiB */
 /*
@@ -76,6 +77,10 @@ static int find_name_and_parent(uint32_t search_cluster, uint32_t current_cluste
     int n = fat32_read_dir(0, current_cluster, entries, 32);
     for (int i = 0; i < n; i++) {
         if ((entries[i].attr & 0x10) == 0x10) {
+            /* Пропускаем специальные записи "." и ".." – иначе возможна бесконечная рекурсия */
+            if (entries[i].name[0] == '.') {
+                continue;
+            }
             uint32_t cl = ((uint32_t)entries[i].first_cluster_high << 16) | entries[i].first_cluster_low;
             char dbgname[9]; int pos = 0;
             for (int j = 0; j < 8; j++)
@@ -107,13 +112,48 @@ int build_path(uint32_t cluster, char path[][9], int max_depth) {
     extern uint32_t root_dir_first_cluster;
     int depth = 0;
     uint32_t cur = cluster;
+
     while (cur != root_dir_first_cluster && depth < max_depth) {
-        char name[9];
-        uint32_t parent = 0;
-        if (!find_name_and_parent(cur, root_dir_first_cluster, name, &parent))
-            break;
+        /* 1. Прочитаем текущий каталог, чтобы узнать кластер родителя (запись "..") */
+        fat32_dir_entry_t *entries = malloc(sizeof(fat32_dir_entry_t) * 32);
+        if (!entries) break;
+        int n = fat32_read_dir(0, cur, entries, 32);
+        uint32_t parent_cluster = root_dir_first_cluster;
+        for (int i = 0; i < n; i++) {
+            if (entries[i].name[0] == '.' && entries[i].name[1] == '.') {
+                parent_cluster = ((uint32_t)entries[i].first_cluster_high << 16) | entries[i].first_cluster_low;
+                if (parent_cluster == 0) parent_cluster = root_dir_first_cluster;
+                break;
+            }
+        }
+
+        /* 2. Прочитаем родительский каталог, чтобы найти имя текущего каталога */
+        fat32_dir_entry_t *pentries = malloc(sizeof(fat32_dir_entry_t) * 32);
+        if (!pentries) { mfree(entries); break; }
+        int pn = fat32_read_dir(0, parent_cluster, pentries, 32);
+        char name[9] = {0};
+        for (int i = 0; i < pn; i++) {
+            if ((pentries[i].attr & 0x10) != 0x10) continue; /* только каталоги */
+            uint32_t cl = ((uint32_t)pentries[i].first_cluster_high << 16) | pentries[i].first_cluster_low;
+            if (cl == cur) {
+                int pos = 0;
+                for (int j = 0; j < 8; j++) {
+                    if (pentries[i].name[j] != ' ' && pentries[i].name[j] != 0) {
+                        name[pos++] = pentries[i].name[j];
+                    }
+                }
+                name[pos] = 0;
+                break;
+            }
+        }
+
+        /* 3. Сохраняем имя в массиве path */
         for (int i = 0; i < 9; i++) path[depth][i] = name[i];
-        cur = parent;
+
+        /* 4. Освобождаем память и поднимаемся вверх */
+        mfree(entries);
+        mfree(pentries);
+        cur = parent_cluster;
         depth++;
     }
     return depth;
@@ -673,7 +713,7 @@ void shell_execute(char *input)
             const char bootmsg[] = "This is not a bootable disk\r\n";
             uint8_t* sector = malloc(512);
             if (!sector) {
-                kprint("Error allocating memory\n");
+                kprintf("<(0c)>Error allocating memory<(0f)>\n");
                 return;
             }
             memset(sector, 0, 512);
@@ -713,7 +753,7 @@ void shell_execute(char *input)
             sector[510] = 0x55; sector[511] = 0xAA;
             // Write Boot Sector
             if (ata_write_sector(current_disk, 0, sector) != 0) {
-                kprint("Error writing Boot Sector\n");
+                kprintf("<(0c)>Error writing Boot Sector<(0f)>\n");
                 return;
             }
             // FSInfo
@@ -724,7 +764,7 @@ void shell_execute(char *input)
             *(uint32_t*)&sector[492] = 0xFFFFFFFF;
             sector[510] = 0x55; sector[511] = 0xAA;
             if (ata_write_sector(current_disk, 1, sector) != 0) {
-                kprint("Error writing FSInfo\n");
+                kprintf("<(0c)>Error writing FSInfo<(0f)>\n");
                 return;
             }
             // Clear FAT and root cluster
@@ -741,17 +781,17 @@ void shell_execute(char *input)
         else if (strcmp(arg[0], "touch") == 0)
         {
             if (count < 2) {
-                kprint("<(0c)>Usage: touch [FILENAME]<(0f)>\n");
+                kprintf("<(0c)>Usage: touch [FILENAME]<(0f)>\n");
                 return;
             }
             fat32_dir_entry_t *entries = malloc(32 * sizeof(fat32_dir_entry_t));
             if (!entries) {
-                kprint("<(0c)>Error allocating memory for fat struct entries<(0f)>\n");
+                kprintf("<(0c)>Error allocating memory for fat struct entries<(0f)>\n");
                 return;
             }
             int n = fat32_read_dir(current_disk, current_dir_cluster, entries, 32);
             if (n < 0 || n >= 32) {
-                kprint("<(0c)>Directory full or error<(0f)>\n");
+                kprintf("<(0c)>Directory full or error<(0f)>\n");
                 mfree(entries);
                 return;
             }
@@ -783,7 +823,7 @@ void shell_execute(char *input)
             if (!sector) { kprintf("touch: OOM sector\n"); mfree(entries); return; }
             uint32_t lba = fat32_cluster_to_lba(current_dir_cluster);
             if (ata_read_sector(current_disk, lba, sector) != 0) {
-                 kprint("<(0c)>Error reading dir<(0f)>\n");
+                 kprintf("<(0c)>Error reading dir<(0f)>\n");
                  mfree(entries);
                  mfree(sector);
                  return;
@@ -805,11 +845,11 @@ void shell_execute(char *input)
                      // Write new entry
                      memset(&new_sector[off], ' ', 11);
                      for (int n = 0; n < 11; n++) new_sector[off + n] = name[n];
-                     new_sector[off + 11] = 0x10; // attr: directory
+                     new_sector[off + 11] = 0x20; // attr: file
                      // --- Выделяем свободный кластер и записываем его ---
                      uint32_t cl = find_free_cluster(current_disk);
                      if (cl == 0) {
-                         kprint("<(0c)>No free cluster<(0f)>\n");
+                         kprintf("<(0c)>No free cluster<(0f)>\n");
                          mfree(entries);
                          return;
                      }
@@ -817,7 +857,7 @@ void shell_execute(char *input)
                      uint8_t *fat_sec = malloc(512);
                      if (!fat_sec) { kprintf("touch: OOM fatsec\n"); mfree(entries); mfree(sector); mfree(new_sector); return; }
                      if (ata_read_sector(current_disk, fat_lba, fat_sec) != 0) {
-                         kprint("<(0c)>Error reading FAT<(0f)>\n");
+                         kprintf("<(0c)>Error reading FAT<(0f)>\n");
                          mfree(entries);
                          mfree(sector);
                          mfree(new_sector);
@@ -827,7 +867,7 @@ void shell_execute(char *input)
                      uint32_t fat_off = (cl * 4) % 512;
                      *(uint32_t*)&fat_sec[fat_off] = 0x0FFFFFFF;
                      if (ata_write_sector(current_disk, fat_lba, fat_sec) != 0) {
-                         kprint("<(0c)>Error writing FAT<(0f)>\n");
+                         kprintf("<(0c)>Error writing FAT<(0f)>\n");
                          mfree(entries);
                          mfree(sector);
                          mfree(new_sector);
@@ -836,11 +876,9 @@ void shell_execute(char *input)
                      }
                      *(uint16_t*)(&new_sector[off + 20]) = (uint16_t)((cl >> 16) & 0xFFFF); // high
                      *(uint16_t*)(&new_sector[off + 26]) = (uint16_t)(cl & 0xFFFF); // low
-                     // --- конец исправления ---
-
                      // Write updated sector
                      if (ata_write_sector(current_disk, lba, new_sector) != 0) {
-                         kprint("<(0c)>Error writing dir<(0f)>\n");
+                         kprintf("<(0c)>Error writing dir<(0f)>\n");
                          mfree(entries);
                          mfree(sector);
                          mfree(new_sector);
@@ -854,7 +892,7 @@ void shell_execute(char *input)
                      return;
                  }
              }
-             kprint("<(0c)>No free entry<(0f)>\n");
+             kprintf("<(0c)>No free entry<(0f)>\n");
              mfree(sector);
              mfree(entries);
              return;
@@ -879,7 +917,7 @@ void shell_execute(char *input)
                 return;
             }
             while (1) {
-                kprintf("<(08)>[isotools] ");
+                kprintf("<(08)>[isotools (cdrom:/%s)]> ", iso_current_dir);
                 get_string(cmd);
                 // Разбиваем cmd на подкоманды
                 int sub_count = 0;
@@ -920,9 +958,9 @@ void shell_execute(char *input)
                         continue;
                     }
                     if (iso_current_dir[0])
-                        kprintf("ISO9660 directory /%s:\n", iso_current_dir);
+                        kprintf("cdrom:/%s:\n", iso_current_dir);
                     else
-                        kprintf("ISO9660 root directory:\n");
+                        kprintf("cdrom:/:\n");
                     size_t offset = 0;
                     while (offset < ISO9660_SECTOR_SIZE) {
                         uint8_t len = sector[offset];
@@ -973,9 +1011,9 @@ void shell_execute(char *input)
                 }
                 else if (strcmp(subarg[0], "pwd") == 0) {
                     if (iso_current_dir[0] == 0) {
-                        kprint("/\n");
+                        kprint("cdrom:/\n");
                     } else {
-                        kprintf("/%s\n", iso_current_dir);
+                        kprintf("cdrom:/%s\n", iso_current_dir);
                     }
                 }
                 else if (strcmp(subarg[0], "clear") == 0) { kclear(); continue; }
@@ -1161,7 +1199,7 @@ void shell_execute(char *input)
                     // Write new entry
                     memset(&new_sector[off], ' ', 11);
                     for (int n = 0; n < 11; n++) new_sector[off + n] = name[n];
-                    new_sector[off + 11] = 0x10; // attr: directory
+                    new_sector[off + 11] = 0x10; // mkdir creates directory (attr: 0x10)
                     // --- Выделяем свободный кластер и записываем его ---
                     uint32_t cl = find_free_cluster(current_disk);
                     if (cl == 0) {
@@ -1197,8 +1235,18 @@ void shell_execute(char *input)
                     }
                     *(uint16_t*)(&new_sector[off + 20]) = (uint16_t)((cl >> 16) & 0xFFFF); // high
                     *(uint16_t*)(&new_sector[off + 26]) = (uint16_t)(cl & 0xFFFF); // low
-                    // --- конец исправления ---
-
+                    /* заполнить новый каталог записями '.' и '..' */
+                    uint8_t dirsec[512]; memset(dirsec, 0, 512);
+                    /* '.' */
+                    memset(dirsec, ' ', 11); dirsec[0] = '.'; dirsec[11] = 0x10;
+                    *(uint16_t*)(&dirsec[20]) = (uint16_t)((cl >> 16) & 0xFFFF);
+                    *(uint16_t*)(&dirsec[26]) = (uint16_t)(cl & 0xFFFF);
+                    /* '..' */
+                    memset(&dirsec[32], ' ', 11); dirsec[32] = '.'; dirsec[33] = '.'; dirsec[43] = 0x10;
+                    *(uint16_t*)(&dirsec[52]) = (uint16_t)((current_dir_cluster >> 16) & 0xFFFF);
+                    *(uint16_t*)(&dirsec[58]) = (uint16_t)(current_dir_cluster & 0xFFFF);
+                    /* записываем сектор */
+                    ata_write_sector(current_disk, fat32_cluster_to_lba(cl), dirsec);
                     // Write updated sector
                     if (ata_write_sector(current_disk, lba, new_sector) != 0) {
                         kprint("<(0c)>Error writing dir<(0f)>\n");
@@ -1208,6 +1256,7 @@ void shell_execute(char *input)
                         return;
                     }
                     mfree(fat_sec);
+                    mfree(new_sector);
                     mfree(sector);
                     mfree(entries);
                     return;
@@ -1474,14 +1523,14 @@ void shell_execute(char *input)
             if (strcmp(arg[1], "-l") == 0) {
                 if (count < 4) { kprint("Usage: xxd -l <len> <file>\n"); return; }
                 len_limit = atoi(arg[2]);
-                if (!len_limit) { kprint("xxd: bad length\n"); return; }
+                if (!len_limit) { kprint("Bad length\n"); return; }
                 fidx = 3;
             }
             const char *fname = arg[fidx];
 
             /* --- ищем файл в текущем каталоге --- */
             fat32_dir_entry_t *dir = malloc(sizeof(fat32_dir_entry_t)*32);
-            if (!dir) { kprint("xxd: OOM\n"); return; }
+            if (!dir) { kprint("xxd: OOM error\n"); return; }
             int n = fat32_read_dir(current_disk, current_dir_cluster, dir, 32);
             if (n < 0) { kprint("xxd: dir error\n"); return; }
 
@@ -2170,7 +2219,9 @@ static int run_fex_fat(const char *path) {
             "mov  %0,   %%esp        \n"
             "call *%1                \n"
             "mov  %%edi, %%esp        \n"
-            : : "r"(USER_STACK_TOP), "r"(entry) : "edi", "memory" );
+            : /* no outputs */
+            : "r"(USER_STACK_TOP), "r"(entry)
+            : "edi", "memory" );
         kprintf("user code returned OK (fat)\n");
     }
     mfree(buf);

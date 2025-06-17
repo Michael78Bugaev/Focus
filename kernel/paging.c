@@ -37,4 +37,17 @@ void init_paging(void)
     asm volatile ("mov %%cr0, %0" : "=r"(cr0));
     cr0 |= 0x80000000;        /* PG */
     asm volatile ("mov %0, %%cr0" :: "r"(cr0));
+}
+
+void disable_cache_for_region(uint32_t addr, uint32_t size)
+{
+    /* Выравниваем начало и конец по границе 4-МиБ страниц */
+    uint32_t start = addr & 0xFFC00000;               /* обнуляем младшие 22 бита */
+    uint32_t end   = (addr + size - 1) & 0xFFC00000;
+    for (uint32_t p = start; p <= end; p += 0x400000) {
+        uint32_t idx = p >> 22;                       /* номер PDE */
+        page_directory[idx] |= PAGE_PCD;              /* отключить кеширование */
+    }
+    /* Сбрасываем TLB перезагрузкой CR3 */
+    asm volatile("mov %0, %%cr3" :: "r"(page_directory));
 } 
