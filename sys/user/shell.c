@@ -67,6 +67,17 @@ static char my_toupper(char c) {
     return c;
 }
 
+// Сравнение строк без учёта регистра ASCII
+static int str_icmp(const char *a, const char *b) {
+    while (*a && *b) {
+        char ca = my_toupper(*a);
+        char cb = my_toupper(*b);
+        if (ca != cb) return ca - cb;
+        ++a; ++b;
+    }
+    return (*a) - (*b);
+}
+
 // Search for name and parent by cluster: returns 1 if found, 0 if not
 static int find_name_and_parent(uint32_t search_cluster, uint32_t current_cluster, char* out_name, uint32_t* out_parent) {
     fat32_dir_entry_t *entries = malloc(sizeof(fat32_dir_entry_t) * 32);
@@ -513,173 +524,55 @@ void shell_execute(char *input)
         } 
         else if (strcmp(arg[0], "ls") == 0)
         {
-            fat32_dir_entry_t *entries = malloc(32 * sizeof(fat32_dir_entry_t));
-            if (!entries) {
-                kprintf("<(0c)>Error allocating memory<(0f)>\n");
-                qemu_debug_printf("Error allocating memory\n");
-                return;
+            fat32_entry_t *entries = malloc(sizeof(fat32_entry_t) * 128);
+            if (!entries) { kprintf("<(0c)>ls: OOM<(0f)>\n"); return; }
+            int n = fat32_list_dir(current_disk, current_dir_cluster, entries, 128);
+            if (n < 0) { kprintf("ls: dir read error\n"); mfree(entries); return; }
+
+            /* Сначала директории */
+            for (int i = 0; i < n; i++) {
+                if (entries[i].attr & 0x10) {
+                    kprintf(" <DIR>  %s\n", entries[i].name);
+                }
             }
-            int n = fat32_read_dir(current_disk, current_dir_cluster, entries, 32);
-            if (n < 0) {
-                kprint("<(0c)>Error reading directory<(0f)>\n");
-                mfree(entries);
-                qemu_debug_printf("Error reading directory\n");
-                return;
+            /* Затем файлы */
+            for (int i = 0; i < n; i++) {
+                if (!(entries[i].attr & 0x10)) {
+                    uint32_t size = entries[i].size;
+                    if (size < 1024)
+                        kprintf(" <FILE> %s (%u bytes)\n", entries[i].name, size);
+                    else if (size < 1024*1024)
+                        kprintf(" <FILE> %s (%u.%u KB)\n", entries[i].name, size/1024, (size%1024)/100);
+                    else
+                        kprintf(" <FILE> %s (%u.%u MB)\n", entries[i].name, size/(1024*1024), (size%(1024*1024))/100000);
+                }
             }
             mfree(entries);
-            qemu_debug_printf("n: %d\n", n);
-            // Сначала выводим директории
-            for (int i = 0; i < n; i++) {
-                if (entries[i].name[0] == 0xE5 || entries[i].name[0] == 0) continue;
-                char c = entries[i].name[0];
-                if (!((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_')) continue;
-                if ((entries[i].attr & 0x0F) == 0x08) continue; // Пропускаем volume label
-                
-                if ((entries[i].attr & 0x10) == 0x10) { // Это директория
-                    char name[13] = {0};
-                    int pos = 0;
-                    
-                    // Имя (8 символов)
-                    for (int j = 0; j < 8; j++) {
-                        if (entries[i].name[j] != ' ') {
-                            name[pos++] = entries[i].name[j];
-                        }
-                    }
-                    
-                    // Расширение (3 символа)
-                    int has_ext = 0;
-                    for (int j = 8; j < 11; j++) {
-                        if (entries[i].name[j] != ' ') has_ext = 1;
-                    }
-                    
-                    if (has_ext) {
-                        name[pos++] = '.';
-                        for (int j = 8; j < 11; j++) {
-                            if (entries[i].name[j] != ' ') {
-                                name[pos++] = entries[i].name[j];
-                            }
-                        }
-                    }
-                    name[pos] = 0;
-                    if (name[0] == 0) continue; // не выводим пустые имена
-                    
-                    // Считаем количество записей в директории
-                    fat32_dir_entry_t *subentries = malloc(32 * sizeof(fat32_dir_entry_t));
-                    if (!subentries) {
-                        kprint("<(0c)>Error allocating memory for fat struct entries<(0f)>\n");
-                        return;
-                    }
-                    int subn = fat32_read_dir(current_disk, 
-                        ((uint32_t)entries[i].first_cluster_high << 16) | entries[i].first_cluster_low, 
-                        subentries, 32);
-                    if (subn < 0) {
-                        kprint("<(0c)>Error reading directory<(0f)>\n");
-                        mfree(subentries);
-                        return;
-                    }
-                    mfree(subentries);
-                    
-                    kprintf(" <DIR>  %s (%d entries)\n", name, subn);
-                            }
-                        }
-            
-            // Затем выводим файлы
-            for (int i = 0; i < n; i++) {
-                if (entries[i].name[0] == 0xE5 || entries[i].name[0] == 0) continue;
-                char c = entries[i].name[0];
-                if (!((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_')) continue;
-                if ((entries[i].attr & 0x0F) == 0x08) continue; // Пропускаем volume label
-                
-                if ((entries[i].attr & 0x10) != 0x10) { // Это файл
-                char name[13] = {0};
-                int pos = 0;
-                    
-                // Имя (8 символов)
-                for (int j = 0; j < 8; j++) {
-                        if (entries[i].name[j] != ' ') {
-                        name[pos++] = entries[i].name[j];
-                }
-                    }
-                    
-                // Расширение (3 символа)
-                int has_ext = 0;
-                for (int j = 8; j < 11; j++) {
-                        if (entries[i].name[j] != ' ') has_ext = 1;
-                }
-                    
-                if (has_ext) {
-                    name[pos++] = '.';
-                    for (int j = 8; j < 11; j++) {
-                            if (entries[i].name[j] != ' ') {
-                                name[pos++] = entries[i].name[j];
-                            }
-                    }
-                }
-                name[pos] = 0;
-                    if (name[0] == 0) continue; // не выводим пустые имена
-                    
-                    // Выводим размер файла
-                    uint32_t size = entries[i].file_size;
-                    if (size < 1024) {
-                        kprintf(" <FILE> %s (%u bytes)\n", name, size);
-                    } else if (size < 1024*1024) {
-                        kprintf(" <FILE> %s (%u.%u KB)\n", name, size/1024, (size%1024)/100);
-                } else {
-                        kprintf(" <FILE> %s (%u.%u MB)\n", name, size/(1024*1024), (size%(1024*1024))/100000);
-                    }
-                }
-            }
             return;
         }
         else if (strcmp(arg[0], "cat") == 0)
         {
-            if (count < 2) {
-                kprint("<(0c)>Usage: cat [FILENAME]<(0f)>\n");
-                return;
-            }
-            fat32_dir_entry_t *entries = malloc(32 * sizeof(fat32_dir_entry_t));
-            if (!entries) {
-                kprint("<(0c)>Error allocating memory for fat struct entries<(0f)>\n");
-                return;
-            }
-            int n = fat32_read_dir(current_disk, current_dir_cluster, entries, 32);
-            if (n < 0) {
-                kprint("<(0c)>Error read directory<(0f)>\n");
-                mfree(entries);
-                return;
-            }
-            char *filename = arg[1];
-            // --- преобразуем имя в 8.3 формат FAT ---
-            char fatname[12];
-            memset(fatname, ' ', 11);
-            fatname[11] = 0;
-            int clen = strlen(filename);
-            int dot = -1;
-            for (int i = 0; i < clen; i++) if (filename[i] == '.') { dot = i; break; }
-            if (dot == -1) {
-                for (int i = 0; i < clen && i < 8; i++) fatname[i] = toupper(filename[i]);
-            } else {
-                for (int i = 0; i < dot && i < 8; i++) fatname[i] = toupper(filename[i]);
-                for (int i = dot + 1, j = 8; i < clen && j < 11; i++, j++) fatname[j] = toupper(filename[i]);
-                }
-            for (int i = 0; i < n; i++) {
-                if (strncmp(entries[i].name, fatname, 11) == 0) {
-                    uint32_t cluster = ((uint32_t)entries[i].first_cluster_high << 16) | entries[i].first_cluster_low;
-                    uint32_t size = entries[i].file_size;
-                    uint32_t to_read = (size > 1024) ? 1024 : size;
+            if (count < 2) { kprint("<(0c)>Usage: cat [FILENAME]<(0f)>\n"); return; }
+            const char* filename = arg[1];
+            fat32_entry_t *entries = malloc(sizeof(fat32_entry_t)*128);
+            if (!entries) { kprint("cat: OOM\n"); return; }
+            int n = fat32_list_dir(current_disk, current_dir_cluster, entries, 128);
+            if (n<0) { kprint("cat: dir error\n"); mfree(entries); return; }
+            for (int i=0;i<n;i++) {
+                if (!(entries[i].attr & 0x10)) { // файл
+                    if (str_icmp(entries[i].name, filename)==0) {
+                        uint32_t size = entries[i].size;
+                        uint32_t to_read = (size>4096)?4096:size;
                     uint8_t *buf = malloc(to_read);
-                    if (!buf) { kprintf("cat: OOM\n"); mfree(entries); return; }
-                    int read = fat32_read_file(current_disk, cluster, buf, to_read);
-                    for (int b = 0; b < read; b++) {
-                        kputchar(buf[b], 0x07);
-                    }
+                        if (!buf) { kprint("cat: OOM\n"); mfree(entries); return; }
+                        int rd = fat32_read_file(current_disk, entries[i].first_cluster, buf, to_read);
+                        for (int b=0; b<rd; b++) kputchar(buf[b],0x07);
                     kprint("\n");
-                    mfree(buf);
-                    mfree(entries);
-                    return;
+                        mfree(buf); mfree(entries); return;
                 }
             }
-            kprint("<(0c)>cat: %s: File not found<(0f)>\n", arg[1]);
+            }
+            kprintf("<(0c)>cat: %s: not found<(0f)>\n", filename);
             mfree(entries);
             return;
         }
@@ -780,121 +673,9 @@ void shell_execute(char *input)
         }
         else if (strcmp(arg[0], "touch") == 0)
         {
-            if (count < 2) {
-                kprintf("<(0c)>Usage: touch [FILENAME]<(0f)>\n");
-                return;
-            }
-            fat32_dir_entry_t *entries = malloc(32 * sizeof(fat32_dir_entry_t));
-            if (!entries) {
-                kprintf("<(0c)>Error allocating memory for fat struct entries<(0f)>\n");
-                return;
-            }
-            int n = fat32_read_dir(current_disk, current_dir_cluster, entries, 32);
-            if (n < 0 || n >= 32) {
-                kprintf("<(0c)>Directory full or error<(0f)>\n");
-                mfree(entries);
-                return;
-            }
-            // File name (8.3, without dot)
-            char name[11];
-            memset(name, ' ', 11);
-            int i = 0, j = 0;
-            while (arg[1][i] && j < 8 && arg[1][i] != '.') name[j++] = my_toupper(arg[1][i++]);
-            /* Обрабатываем расширение (если было указано) */
-            if (arg[1][i] == '.') {
-                i++; int k = 0;
-                while (arg[1][i] && k < 3) {
-                    name[8 + k] = my_toupper(arg[1][i]);
-                    i++; k++;
-                }
-            }
-
-            /* --- Проверяем, что запись с таким именем ещё не существует --- */
-            for (int idx = 0; idx < n; idx++) {
-                if (entries[idx].name[0] == 0xE5 || entries[idx].name[0] == 0x00) continue; // удалённая/пустая
-                if (memcmp(entries[idx].name, name, 11) == 0) {
-                    kprintf("<(0c)>Entry with this name already exists<(0f)>\n");
-                    mfree(entries);
-                    return;
-                }
-            }
-            // Find free entry
-            uint8_t *sector = malloc(512);
-            if (!sector) { kprintf("touch: OOM sector\n"); mfree(entries); return; }
-            uint32_t lba = fat32_cluster_to_lba(current_dir_cluster);
-            if (ata_read_sector(current_disk, lba, sector) != 0) {
-                 kprintf("<(0c)>Error reading dir<(0f)>\n");
-                 mfree(entries);
-                 mfree(sector);
-                 return;
-             }
-             for (int off = 0; off < 512; off += 32) {
-                 if (sector[off] == 0x00 || sector[off] == 0xE5) {
-                     // First erase entire sector
-                     uint8_t *new_sector = malloc(512);
-                     if (!new_sector) { kprintf("touch: OOM newsec\n"); mfree(entries); mfree(sector); return; }
-                     memset(new_sector, 0, 512);
-                     // Copy all entries before current
-                     for (int i = 0; i < off; i++) {
-                         new_sector[i] = sector[i];
-                     }
-                     // Copy all entries after current
-                     for (int i = off + 32; i < 512; i++) {
-                         new_sector[i] = sector[i];
-                     }
-                     // Write new entry
-                     memset(&new_sector[off], ' ', 11);
-                     for (int n = 0; n < 11; n++) new_sector[off + n] = name[n];
-                     new_sector[off + 11] = 0x20; // attr: file
-                     // --- Выделяем свободный кластер и записываем его ---
-                     uint32_t cl = find_free_cluster(current_disk);
-                     if (cl == 0) {
-                         kprintf("<(0c)>No free cluster<(0f)>\n");
-                         mfree(entries);
-                         return;
-                     }
-                     uint32_t fat_lba = fat_start + (cl * 4) / 512;
-                     uint8_t *fat_sec = malloc(512);
-                     if (!fat_sec) { kprintf("touch: OOM fatsec\n"); mfree(entries); mfree(sector); mfree(new_sector); return; }
-                     if (ata_read_sector(current_disk, fat_lba, fat_sec) != 0) {
-                         kprintf("<(0c)>Error reading FAT<(0f)>\n");
-                         mfree(entries);
-                         mfree(sector);
-                         mfree(new_sector);
-                         mfree(fat_sec);
-                         return;
-                     }
-                     uint32_t fat_off = (cl * 4) % 512;
-                     *(uint32_t*)&fat_sec[fat_off] = 0x0FFFFFFF;
-                     if (ata_write_sector(current_disk, fat_lba, fat_sec) != 0) {
-                         kprintf("<(0c)>Error writing FAT<(0f)>\n");
-                         mfree(entries);
-                         mfree(sector);
-                         mfree(new_sector);
-                         mfree(fat_sec);
-                         return;
-                     }
-                     *(uint16_t*)(&new_sector[off + 20]) = (uint16_t)((cl >> 16) & 0xFFFF); // high
-                     *(uint16_t*)(&new_sector[off + 26]) = (uint16_t)(cl & 0xFFFF); // low
-                     // Write updated sector
-                     if (ata_write_sector(current_disk, lba, new_sector) != 0) {
-                         kprintf("<(0c)>Error writing dir<(0f)>\n");
-                         mfree(entries);
-                         mfree(sector);
-                         mfree(new_sector);
-                         mfree(fat_sec);
-                         return;
-                     }
-                     mfree(fat_sec);
-                     mfree(new_sector);
-                     mfree(sector);
-                     mfree(entries);
-                     return;
-                 }
-             }
-             kprintf("<(0c)>No free entry<(0f)>\n");
-             mfree(sector);
-             mfree(entries);
+            if(count<2){ kprintf("<(0c)>Usage: touch [FILENAME]<(0f)>\n"); return; }
+            if(fat32_create_file(current_disk, arg[1])==0){ return; }
+            kprintf("touch: error creating %s\n", arg[1]);
              return;
         }
         else if (strcmp(arg[0], "isotools") == 0)
@@ -1123,148 +904,9 @@ void shell_execute(char *input)
         }
         else if (strcmp(arg[0], "mkdir") == 0)
         {
-            if (count < 2) {
-                kprintf("<(0c)>Usage: mkdir [DIRNAME]<(0f)>\n");
-                return;
-            }
-            fat32_dir_entry_t *entries = malloc(32 * sizeof(fat32_dir_entry_t));
-            if (!entries) {
-                kprintf("<(0c)>Error allocating memory for fat struct entries<(0f)>\n");
-                return;
-            }
-            int n = fat32_read_dir(current_disk, current_dir_cluster, entries, 32);
-            if (n < 0 || n >= 32) {
-                kprintf("<(0c)>Directory full or error<(0f)>\n");
-                mfree(entries);
-                return;
-            }
-            // Directory name (8.3, without dot)
-            char name[11];
-            memset(name, ' ', 11);
-            int i = 0, j = 0;
-            while (arg[1][i] && j < 8 && arg[1][i] != '.') name[j++] = my_toupper(arg[1][i++]);
-            /* Обрабатываем расширение (если было указано) */
-            if (arg[1][i] == '.') {
-                i++; int k = 0;
-                while (arg[1][i] && k < 3) {
-                    name[8 + k] = my_toupper(arg[1][i]);
-                    i++; k++;
-                }
-            }
-
-            /* --- Проверяем, что запись с таким именем ещё не существует --- */
-            for (int idx = 0; idx < n; idx++) {
-                if (entries[idx].name[0] == 0xE5 || entries[idx].name[0] == 0x00) continue; // удалённая/пустая
-                if (memcmp(entries[idx].name, name, 11) == 0) {
-                    kprintf("<(0c)>Entry with this name already exists<(0f)>\n");
-                    mfree(entries);
-                    return;
-                }
-            }
-            // Find free entry
-            uint8_t *sector = malloc(512);
-            if (!sector)
-            {
-                kprintf("Error allocating memory\n");
-                mfree(entries);
-                return -10;
-            }
-            uint32_t lba = fat32_cluster_to_lba(current_dir_cluster);
-            if (ata_read_sector(current_disk, lba, sector) != 0) {
-                kprint("<(0c)>Error reading dir<(0f)>\n");
-                mfree(sector);
-                mfree(entries);
-                return;
-            }
-            for (int off = 0; off < 512; off += 32) {
-                if (sector[off] == 0x00 || sector[off] == 0xE5) {
-                    // First erase entire sector
-                    uint8_t *new_sector = malloc(512);
-                    if (!new_sector)
-                    {
-                        kprintf("Error allocating memory\n");
-                        mfree(entries);
-                        mfree(sector);
-                        return -10;
-                    }
-                    memset(new_sector, 0, 512);
-                    // Copy all entries before current
-                    for (int i = 0; i < off; i++) {
-                        new_sector[i] = sector[i];
-                    }
-                    // Copy all entries after current
-                    for (int i = off + 32; i < 512; i++) {
-                        new_sector[i] = sector[i];
-                    }
-                    // Write new entry
-                    memset(&new_sector[off], ' ', 11);
-                    for (int n = 0; n < 11; n++) new_sector[off + n] = name[n];
-                    new_sector[off + 11] = 0x10; // mkdir creates directory (attr: 0x10)
-                    // --- Выделяем свободный кластер и записываем его ---
-                    uint32_t cl = find_free_cluster(current_disk);
-                    if (cl == 0) {
-                        kprintf("<(0c)>No free cluster<(0f)>\n");
-                        mfree(entries);
-                        mfree(sector);
-                        return;
-                    }
-                    uint32_t fat_lba = fat_start + (cl * 4) / 512;
-                    uint8_t *fat_sec = malloc(512);
-                    if (!fat_sec)
-                    {
-                        kprintf("Error allocating memory\n");
-                        mfree(entries);
-                        mfree(sector);
-                        return -10;
-                    }
-                    if (ata_read_sector(current_disk, fat_lba, fat_sec) != 0) {
-                        kprint("<(0c)>Error reading FAT<(0f)>\n");
-                        mfree(entries);
-                        mfree(sector);
-                        mfree(fat_sec);
-                        return;
-                    }
-                    uint32_t fat_off = (cl * 4) % 512;
-                    *(uint32_t*)&fat_sec[fat_off] = 0x0FFFFFFF;
-                    if (ata_write_sector(current_disk, fat_lba, fat_sec) != 0) {
-                        kprint("<(0c)>Error writing FAT<(0f)>\n");
-                        mfree(entries);
-                        mfree(sector);
-                        mfree(fat_sec);
-                        return;
-                    }
-                    *(uint16_t*)(&new_sector[off + 20]) = (uint16_t)((cl >> 16) & 0xFFFF); // high
-                    *(uint16_t*)(&new_sector[off + 26]) = (uint16_t)(cl & 0xFFFF); // low
-                    /* заполнить новый каталог записями '.' и '..' */
-                    uint8_t dirsec[512]; memset(dirsec, 0, 512);
-                    /* '.' */
-                    memset(dirsec, ' ', 11); dirsec[0] = '.'; dirsec[11] = 0x10;
-                    *(uint16_t*)(&dirsec[20]) = (uint16_t)((cl >> 16) & 0xFFFF);
-                    *(uint16_t*)(&dirsec[26]) = (uint16_t)(cl & 0xFFFF);
-                    /* '..' */
-                    memset(&dirsec[32], ' ', 11); dirsec[32] = '.'; dirsec[33] = '.'; dirsec[43] = 0x10;
-                    *(uint16_t*)(&dirsec[52]) = (uint16_t)((current_dir_cluster >> 16) & 0xFFFF);
-                    *(uint16_t*)(&dirsec[58]) = (uint16_t)(current_dir_cluster & 0xFFFF);
-                    /* записываем сектор */
-                    ata_write_sector(current_disk, fat32_cluster_to_lba(cl), dirsec);
-                    // Write updated sector
-                    if (ata_write_sector(current_disk, lba, new_sector) != 0) {
-                        kprint("<(0c)>Error writing dir<(0f)>\n");
-                        mfree(entries);
-                        mfree(sector);
-                        mfree(fat_sec);
-                        return;
-                    }
-                    mfree(fat_sec);
-                    mfree(new_sector);
-                    mfree(sector);
-                    mfree(entries);
-                    return;
-                }
-            }
-            kprint("<(0c)>No free entry<(0f)>\n");
-            mfree(entries);
-            mfree(sector);
+            if(count<2){ kprintf("<(0c)>Usage: mkdir <dirname>\n"); return; }
+            if(fat32_create_dir(current_disk, arg[1])==0) { return; }
+            kprintf("mkdir: error creating %s\n", arg[1]);
             return;
         }
         else if (strcmp(arg[0], "rm") == 0)
