@@ -10,13 +10,13 @@ const uint32_t freq = 1000;
 int target = 0;
 int old_ticks;
 int cursor_blink = 0;
-// Делаем доступным для других файлов
+// Make it available for other files
 extern int cursor_blink;
 
 void on_irq0(struct InterruptRegisters *regs){
     ticks += 1;
 
-    // Мигаем курсором каждые 500 мс (freq=1000, значит 500 тиков)
+    // Blink cursor every 500 ms (freq=1000, so 500 ticks)
     if (ticks % 200 == 0) {
         cursor_blink = !cursor_blink;
         draw_cursor(cursor_blink);
@@ -49,7 +49,7 @@ void pit_sleep(int ms)
 
     while (ticks != target)
     {
-        __asm__ __volatile__("sti\n\t"  // Включаем прерывания
-                            "hlt\n\t");  // Ждем прерывания
+        __asm__ __volatile__("sti\n\t"  // Enable interrupts
+                            "hlt\n\t");  // Wait for interrupt
     }
 }

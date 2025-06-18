@@ -14,7 +14,7 @@ static void memcpy_to_vaddr_manual(Elf32_Addr vaddr, const void *src, size_t len
 static void map_4M(uint32_t vaddr)
 {
     uint32_t pd_idx = vaddr >> 22;
-    extern uint32_t *page_directory;   /* из paging.c */
+    extern uint32_t *page_directory;   /* from paging.c */
     if (!(page_directory[pd_idx] & PAGE_PRESENT)) {
         uint32_t phys = pd_idx << 22;                /* identity     */
         page_directory[pd_idx] = phys | PAGE_PRESENT | PAGE_RW | (1<<7);
@@ -25,13 +25,13 @@ static void map_4M(uint32_t vaddr)
 /* ensure every 4-MiB chunk in [vaddr, vaddr+memsz) mapped */
 static void ensure_region_mapped(uint32_t vaddr, uint32_t memsz)
 {
-    uint32_t start = vaddr & ~0x3FFFFF;              /* 4 МиБ align  */
+    uint32_t start = vaddr & ~0x3FFFFF;              /* 4 MiB align  */
     uint32_t end   = (vaddr + memsz + 0x3FFFFF) & ~0x3FFFFF;
     for (uint32_t p = start; p < end; p += 0x400000)
         map_4M(p);
 }
 
-// Загрузка сегментов PT_LOAD в память
+// Loading segments into memory
 void elf_load_segments(const uint8_t *elf_data, void (*memcpy_to_vaddr)(Elf32_Addr vaddr, const void *src, size_t len)) {
     const Elf32_Ehdr *ehdr = (const Elf32_Ehdr *)elf_data;
     const Elf32_Phdr *phdrs = (const Elf32_Phdr *)(elf_data + ehdr->e_phoff);
@@ -43,7 +43,7 @@ void elf_load_segments(const uint8_t *elf_data, void (*memcpy_to_vaddr)(Elf32_Ad
         if (ph->p_type != PT_LOAD) continue;
 
         ensure_region_mapped(ph->p_vaddr, ph->p_memsz);
-        memcpy_to_vaddr_manual(ph->p_vaddr, &elf_data + 0x1000, ph->p_filesz);
+        memcpy_to_vaddr_manual(ph->p_vaddr, elf_data + ph->p_offset, ph->p_filesz);
         kprintf("[ELF]   -> copied %u bytes to 0x%08x\n", ph->p_filesz, ph->p_vaddr);
 
         if (ph->p_memsz > ph->p_filesz) {
@@ -53,7 +53,7 @@ void elf_load_segments(const uint8_t *elf_data, void (*memcpy_to_vaddr)(Elf32_Ad
     }
 }
 
-// Пример функции memcpy_to_vaddr для bare-metal/OS
+// Example function memcpy_to_vaddr for bare-metal/OS
 void memcpy_to_vaddr(Elf32_Addr vaddr, const void *src, size_t len) {
     memcpy(src, (void *)vaddr, len);
 }
@@ -65,7 +65,7 @@ static void memcpy_to_vaddr_manual(Elf32_Addr vaddr, const void *src, size_t len
     for(size_t i=0;i<len;i++) dst[i]=s[i];
 }
 
-// Основная функция загрузки ELF
+// Main function to load ELF
 bool elf_load(const uint8_t *elf_data, void (*memcpy_to_vaddr)(Elf32_Addr, const void *, size_t), Elf32_Addr *entry_point) {
     const Elf32_Ehdr *ehdr = (const Elf32_Ehdr *)elf_data;
     kprintf("[ELF] Checking ELF header...\n");

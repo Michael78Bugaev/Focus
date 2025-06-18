@@ -19,7 +19,7 @@ void getch_handler(struct InterruptRegisters *regs) {
     uint8_t scanCode = code & 0x7F;
     uint8_t press = code & 0x80;
     
-    // Обработка Shift
+    // Shift processing
     if (scanCode == 0x2A || scanCode == 0x36) { // Shift
         if (!press) {
             shiftOn = 1; 
@@ -37,15 +37,15 @@ void getch_handler(struct InterruptRegisters *regs) {
     if (press == 0) {
         switch (scanCode) {
             case 0x01: // Escape
-                getch_scancode = 0x1B;  // Возвращаем ASCII код ESC
+                getch_scancode = 0x1B;  // Return ASCII code ESC
                 getch_flag = 1;
                 break;
             case 0x1C: // Enter
-                getch_scancode = 0x0D;  // Возвращаем ASCII код Enter
+                getch_scancode = 0x0D;  // Return ASCII code Enter
                 getch_flag = 1;
             break;
             case 0x0E: // Backspace
-                getch_scancode = 0x08;  // Возвращаем ASCII код Backspace
+                getch_scancode = 0x08;  // Return ASCII code Backspace
                 getch_flag = 1;
             break;
             case 0x48: // Up Arrow
@@ -220,9 +220,9 @@ void strnone(char *str)
 }
 
 char **splitString(const char *str, int *count) {
-    /* Статический буфер и массив указателей – одна аллокация на всё время
-       работы, перезаписывается при каждом вызове.  
-       Ограничения: максимум 64 слов по 64 байта каждое. */
+    /* Static buffer and array of pointers – one allocation for the entire time
+       works, rewritten on each call.  
+       Limitations: maximum 64 words of 64 bytes each. */
     static char words_buf[64][64];
     static char *result[64];
 
@@ -230,7 +230,7 @@ char **splitString(const char *str, int *count) {
     const char *ptr = str;
 
     while (*ptr && n < 64) {
-        while (*ptr == ' ') ptr++;          /* пропуск пробелов */
+        while (*ptr == ' ') ptr++;          /* skip spaces */
         if (!*ptr) break;
 
         char *dst = words_buf[n]; int len = 0;
@@ -305,18 +305,18 @@ int to_integer(const char* str) {
 #define MAX_COMMAND_LENGTH 1024
 
 void *memmove(void *dest, const void *src, size_t n) {
-    // Приводим указатели к типу char* для работы с байтами
+    // Cast pointers to char* for working with bytes
     char *d = (char *)dest;
     const char *s = (const char *)src;
 
-    // Если области памяти не перекрываются, просто копируем
+    // If the memory areas do not overlap, just copy
     if (d < s || d >= s + n) {
-        // Копируем от начала до конца
+        // Copy from the beginning to the end
         while (n--) {
             *d++ = *s++;
         }
     } else {
-        // Если области перекрываются, копируем с конца
+        // If the areas overlap, copy from the end
         d += n;
         s += n;
         while (n--) {
@@ -324,7 +324,7 @@ void *memmove(void *dest, const void *src, size_t n) {
         }
     }
 
-    return dest; // Возвращаем указатель на целевую область
+    return dest; // Return the pointer to the target area
 }
 
 char *strdup(const char *str) {
@@ -369,7 +369,7 @@ char* tostr(int value) {
         value /= 10;
     }
 
-    // Add the negative sign if needed
+    // Add the negative sign if needed (if the number is negative)
     if (is_negative) {
         str[0] = '-';
     }
@@ -378,74 +378,74 @@ char* tostr(int value) {
 }
 
 int strncmp(const char *s1, const char *s2, size_t n) {
-    // Если длина для сравнения равна 0, строки считаются равными
+    // If the length for comparison is 0, strings are considered equal
     if (n == 0)
         return 0;
 
-    // Сравниваем посимвольно до n символов
+    // Compare characters one by one up to n characters
     while (n-- > 0) {
-        // Если текущие символы не равны, возвращаем их разницу
+        // If the current characters are not equal, return their difference
         if (*s1 != *s2) {
             return *(unsigned char *)s1 - *(unsigned char *)s2;
         }
 
-        // Если достигнут конец одной из строк, прекращаем сравнение
+        // If the end of one of the strings is reached, stop the comparison
         if (*s1 == '\0') {
             return 0;
         }
 
-        // Переходим к следующим символам
+        // Go to the next characters
         s1++;
         s2++;
     }
 
-    // Если все символы до n равны
+    // If all characters up to n are equal
     return 0;
 }
 
 char* strtok(char* str, const char* delimiters) {
     static char* last_token = NULL;
     
-    // Если str не NULL, начинаем новый процесс токенизации
-    // Если NULL, продолжаем с последней позиции
+    // If str is not NULL, start a new tokenization process
+    // If NULL, continue from the last position
     if (str != NULL) {
         last_token = str;
     } else if (last_token == NULL) {
         return NULL;
     }
     
-    // Пропускаем начальные разделители
+    // Skip initial delimiters
     while (*last_token != '\0' && strchr(delimiters, *last_token) != NULL) {
         last_token++;
     }
     
-    // Если достигнут конец строки, возвращаем NULL
+    // If the end of the string is reached, return NULL
     if (*last_token == '\0') {
         last_token = NULL;
         return NULL;
     }
     
-    // Начало текущего токена
+    // Start of the current token
     char* token_start = last_token;
     
-    // Ищем конец текущего токена
+    // Find the end of the current token
     while (*last_token != '\0' && strchr(delimiters, *last_token) == NULL) {
         last_token++;
     }
     
-    // Если найден разделитель, заменяем его на '\0' и сохраняем позицию
+    // If the delimiter is found, replace it with '\0' and save the position
     if (*last_token != '\0') {
         *last_token = '\0';
         last_token++;
     } else {
-        // Если достигнут конец строки, сбрасываем указатель
+        // If the end of the string is reached, reset the pointer
         last_token = NULL;
     }
     
     return token_start;
 }
 
-// Вспомогательная функция strchr (если её нет)
+// Helper function strchr (if it's not there)
 char* strchr(const char* str, int character) {
     while (*str != '\0') {
         if (*str == character) {
@@ -487,27 +487,27 @@ int istrncmp(const char *str1, const char *str2, int n) {
 }
 
 char *strrchr(const char *str, int character) {
-    const char *last_occurrence = NULL; // Указатель на последнее вхождение символа
+    const char *last_occurrence = NULL; // Pointer to the last occurrence of the character
     while (*str) {
         if (*str == (char)character) {
-            last_occurrence = str; // Обновляем указатель, если символ найден
+            last_occurrence = str; // Update the pointer if the character is found
         }
-        str++; // Переход к следующему символу
+        str++; // Go to the next character
     }
-    return (char *)last_occurrence; // Возвращаем последнее вхождение или NULL
+    return (char *)last_occurrence; // Return the last occurrence or NULL
 }
 
 void remove_null_chars(char *str) {
-    char *src = str; // Указатель на исходную строку
-    char *dst = str; // Указатель на место для записи результата
+    char *src = str; // Pointer to the original string
+    char *dst = str; // Pointer to the place for the result
 
-    while (*src) { // Пока не достигнут конец строки
-        if (*src != '\0') { // Если текущий символ не '\0'
-            *dst++ = *src; // Копируем его в результирующую строку
+    while (*src) { // Until the end of the string is reached
+        if (*src != '\0') { // If the current character is not '\0'
+            *dst++ = *src; // Copy it to the resulting string
         }
-        src++; // Переходим к следующему символу
+        src++; // Go to the next character
     }
-    *dst = '\0'; // Завершаем результирующую строку нулевым символом
+    *dst = '\0'; // End the resulting string with a null character
 }
 
 void itoa(int value, char* str, int base) {
@@ -534,7 +534,7 @@ void itoa(int value, char* str, int base) {
         value = value / base;
     }
 
-    // If number is negative, append '-'
+    // If the number is negative, append '-'
     if (is_negative) {
         str[i++] = '-';
     }
@@ -546,61 +546,61 @@ void itoa(int value, char* str, int base) {
 }
 
 char **split(const char *str, int *count, const char delimeter) {
-    // Сначала подсчитаем количество слов
+    // First, count the number of words
     int n = 0;
     const char *ptr = str;
     while (*ptr) {
-        // Пропускаем пробелы
+        // Skip spaces
         while (*ptr == delimeter) {
             ptr++;
         }
         if (*ptr) {
-            n++; // Нашли слово
-            // Пропускаем само слово
+            n++; // Found a word
+            // Skip the word
             while (*ptr && *ptr != delimeter) {
                 ptr++;
             }
         }
     }
 
-    // Выделяем память для массива строк
+    // Allocate memory for the array of strings
     char **result = malloc(n * sizeof(char *));
     if (!result) {
-        return NULL; // Ошибка выделения памяти
+        return NULL; // Memory allocation error
     }
 
-    // Заполняем массив словами
+    // Fill the array with words
     int index = 0;
     ptr = str;
     while (*ptr) {
-        // Пропускаем пробелы
+        // Skip spaces
         while (*ptr == delimeter) {
             ptr++;
         }
         if (*ptr) {
             const char *start = ptr;
-            // Находим конец слова
+            // Find the end of the word
             while (*ptr && *ptr != delimeter) {
                 ptr++;
             }
-            // Выделяем память для слова и копируем его
+            // Allocate memory for the word and copy it
             int length = ptr - start;
             result[index] = malloc((length + 1) * sizeof(char));
             if (!result[index]) {
-                // Освобождаем ранее выделенную память в случае ошибки
+                // Free previously allocated memory in case of error
                 for (int j = 0; j < index; j++) {
                     mfree(result[j]);
                 }
                 mfree(result);
-                return NULL; // Ошибка выделения памяти
+                return NULL; // Memory allocation error
             }
             strncpy(result[index], start, length);
-            result[index][length] = '\0'; // Завершаем строку нулевым символом
+            result[index][length] = '\0'; // End the string with a null character
             index++;
         }
     }
 
-    *count = n; // Возвращаем количество найденных слов
+    *count = n; // Return the number of found words
     return result;
 }
 
@@ -635,13 +635,13 @@ int kgetch() {
         irq_install_handler(1, &getch_handler);
     }
 
-    // Спецклавиши — возвращаем напрямую
+    // Special keys — return directly
     if (getch_scancode == 0x1B || getch_scancode == 0x0D || getch_scancode == 0x08 ||
         (getch_scancode >= 0x80 && getch_scancode <= 0x88)) {
         return getch_scancode;
     }
 
-    // Обычные буквы/цифры
+    // Ordinary letters/numbers
     if (shiftOn || capsOn || capsLock) {
             return get_acsii_high(getch_scancode);
     } else {

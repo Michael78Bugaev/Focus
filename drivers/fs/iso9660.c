@@ -135,7 +135,8 @@ int iso9660_read(const char* path, void* buffer, uint32_t max_size) {
             return -2;
         }
         uint32_t to_copy = size < max_size ? size : max_size;
-        memcpy(buffer, temp, to_copy);
+        /* копируем данные из временного сектора в пользовательский буфер */
+        memcpy(temp, buffer, to_copy);
         mfree(temp);
         return to_copy;
     }
@@ -158,7 +159,8 @@ int iso9660_read(const char* path, void* buffer, uint32_t max_size) {
         if (atapi_read_device(iso9660_atapi_devnum, lba + sectors_to_read, 1, tail_buf) != 0) return -2;
         uint32_t remain = size - bytes;                     // bytes we still need to return ( < 2048 )
         if (remain > max_size - bytes) remain = max_size - bytes; // honour max_size limit
-        memcpy((uint8_t*)buffer + bytes, tail_buf, remain);
+        /* копируем хвостовые байты из tail_buf в буфер пользователя */
+        memcpy(tail_buf, (uint8_t*)buffer + bytes, remain);
         bytes += remain;
     }
 

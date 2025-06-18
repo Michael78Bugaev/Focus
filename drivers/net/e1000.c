@@ -178,7 +178,7 @@ static int e1000_send_frame(struct net_device *dev, const uint8_t *buf, uint16_t
         return -2;
     }
     /* copy data */
-    memcpy(g_tx_bufs[tail], buf, len);
+    memcpy(buf, g_tx_bufs[tail], len);
     desc->addr = (uint32_t)g_tx_bufs[tail];
     desc->length = len;
     desc->cmd = 0x9; /* RS | EOP */

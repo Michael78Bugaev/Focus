@@ -1,11 +1,16 @@
-// Реализация FAT32 с поддержкой длинных имён (LFN)
+// Implementation of FAT32 with support for long names (LFN)
 #include <fat32.h>
 #include <ata.h>
 #include <string.h>
 #include <mem.h>
+#include <stdbool.h>
+
+#ifndef FAT_DEBUG
+#define FAT_DEBUG 0
+#endif
 
 /* ---------------------------------------------------------------------
- *  Глобальные переменные, доступные другим модулям
+ *  Global variables, accessible to other modules
  * -------------------------------------------------------------------*/
 fat32_bpb_t fat32_bpb;
 uint32_t    fat_start              = 0;
@@ -15,18 +20,25 @@ uint32_t    current_dir_cluster    = 2;
 /* private */
 static uint32_t cluster_begin_lba   = 0;
 static uint32_t sectors_per_fat     = 0;
+static uint32_t total_clusters      = 0;
+/* Hint for fast search for free clusters */
+static uint32_t next_free_hint      = 3;
 
-/* Кеш одного сектора FAT для ускорения get_next_cluster */
+/* Cache of one FAT sector for speeding up get_next_cluster */
 static uint32_t cached_fat_sector   = 0xFFFFFFFF;
 static uint8_t  fat_cache[512];
+
+/* Forward declarations for helpers located later in this file */
+static uint32_t find_free_cluster(uint8_t drive);
+static int      fat_write_fat_entry(uint8_t drive, uint32_t cluster, uint32_t value);
 
 // ------------------------------------------------------------------
 static char toupper_ascii(char c) {
     return (c>='a' && c<='z') ? (c - ('a'-'A')) : c;
 }
 
-/* Декодировать 13 UTF-16 символов из LFN-записи в ASCII.
- * Возвращает количество добавленных символов. */
+/* Decode 13 UTF-16 characters from LFN record to ASCII.
+ * Returns the number of added characters. */
 static int lfn_copy_part(char *dst, const fat32_lfn_entry_t *lfn) {
     int pos = 0;
     const uint16_t *src16;
@@ -55,7 +67,7 @@ static int lfn_copy_part(char *dst, const fat32_lfn_entry_t *lfn) {
     return pos;
 }
 
-/* Сравнение ASCII строк без учёта регистра. */
+/* Comparison of ASCII strings without regard to case. */
 static int strcasecmp_ascii(const char *a, const char *b) {
     while (*a && *b) {
         char ca = toupper_ascii(*a);
@@ -103,7 +115,7 @@ int fat32_mount(uint8_t drive) {
     uint8_t *sector = malloc(512);
     if (!sector) return -1;
     if (ata_read_sector(drive, 0, sector)!=0) { mfree(sector); return -2; }
-    memcpy(sector, &fat32_bpb, sizeof(fat32_bpb));
+    memcpy(sector, &fat32_bpb, sizeof(fat32_bpb)); /* src=sector, dst=bpb */
 
     if (fat32_bpb.table_size_32==0) { mfree(sector); kprintf("fat32_mount: table_size_32 is 0\n"); return -3; }
     sectors_per_fat     = fat32_bpb.table_size_32;
@@ -112,8 +124,23 @@ int fat32_mount(uint8_t drive) {
     root_dir_first_cluster = fat32_bpb.root_cluster ? fat32_bpb.root_cluster : 2;
     current_dir_cluster = root_dir_first_cluster;
 
+    kprintf("sectors_per_fat: %d\n", sectors_per_fat);
+    kprintf("fat_start: %d\n", fat_start);
+    kprintf("cluster_begin_lba: %d\n", cluster_begin_lba);
+    kprintf("root_dir_first_cluster: %d\n", root_dir_first_cluster);
+    kprintf("current_dir_cluster: %d\n", current_dir_cluster);
+
+    /* количество доступных кластеров на разделе */
+    uint32_t data_sectors = fat32_bpb.total_sectors_32 - cluster_begin_lba;
+    total_clusters = data_sectors / fat32_bpb.sectors_per_cluster;
+
     mfree(sector);
     cached_fat_sector = 0xFFFFFFFF; // сброс кеша
+    next_free_hint    = 3;          // сброс hint-указателя
+
+    /* --- DEBUG: выводим значение FAT для кластера 3 после монтирования --- */
+    qemu_debug_printf("FAT[3] = %08X\n", fat32_get_next_cluster(drive, 3));
+
     return 0;
 }
 
@@ -152,6 +179,16 @@ int fat32_list_dir(uint8_t drive, uint32_t cluster,
         for (uint8_t s=0; s<fat32_bpb.sectors_per_cluster; s++) {
             uint32_t lba = fat32_cluster_to_lba(cl)+s;
             if (ata_read_sector(drive, lba, sector)!=0) { mfree(sector); return -2; }
+
+            /* --- DEBUG: печатаем первые 16 байт первого сектора каталога --- */
+            #if FAT_DEBUG
+            if(s==0){
+                qemu_debug_printf("DIR cl=%u lba=%u first16: ", cl, lba);
+                for(int dbg=0; dbg<16; ++dbg) qemu_debug_printf("%02X ", sector[dbg]);
+                qemu_debug_printf("\n");
+            }
+            #endif
+
             for (int off=0; off<512; off+=32) {
                 fat32_dir_entry_t *ent = (fat32_dir_entry_t*)&sector[off];
                 if (ent->name[0]==0x00) { mfree(sector); return count; }
@@ -176,14 +213,15 @@ int fat32_list_dir(uint8_t drive, uint32_t cluster,
                 fat32_entry_t *dst = &out[count];
                 memset(dst,0,sizeof(*dst));
                 if (lfn_present) {
-                    /* склеиваем части в прямом порядке */
-                    int pos = 0;
-                    for (int i = 0; i < lfn_present; i++) {
+                    /* склеиваем части LFN в правильном порядке */
+                    dst->name[0] = '\0';
+                    for (int i = lfn_present - 1; i >= 0; i--) {
                         int len = strlen(lfn_parts[i]);
-                        memcpy(lfn_parts[i], &dst->name[pos], len);
-                        pos += len;
+                        int pos = strlen(dst->name);
+                        for(int k=0;k<len && pos < FAT32_MAX_NAME; k++)
+                            dst->name[pos++] = lfn_parts[i][k];
+                        dst->name[pos] = '\0';
                     }
-                    dst->name[pos]=0;
                 } else {
                     shortname_to_string(ent->name, dst->name);
                 }
@@ -219,7 +257,9 @@ int fat32_read_dir(uint8_t drive, uint32_t cluster,
                 if (ent->name[0]==0x00) { mfree(sector); return count; }
                 if (ent->attr==0x0F || ent->name[0]==0xE5) continue; // пропускаем LFN и удалённые
                 if (count>=max_entries) { mfree(sector); return count; }
-                memcpy(ent, &entries[count], sizeof(fat32_dir_entry_t));
+                /* копируем 32-байтную запись в выходной массив (src,dst) */
+                for (int j=0;j<sizeof(fat32_dir_entry_t);j++)
+                    ((uint8_t*)&entries[count])[j] = ((uint8_t*)ent)[j];
                 count++;
             }
         }
@@ -243,7 +283,7 @@ int fat32_read_file(uint8_t drive, uint32_t first_cluster,
             uint32_t lba = fat32_cluster_to_lba(cluster)+s;
             if (ata_read_sector(drive, lba, sector)!=0) { mfree(sector); return -3; }
             uint32_t copy = (size-total>512)?512:(size-total);
-            memcpy(sector, buf+total, copy);
+            memcpy(sector, buf + total, copy);   /* src = sector, dst = buf+total (src,dst,len) */
             total += copy;
             if (total>=size) break;
         }
@@ -256,7 +296,128 @@ int fat32_read_file(uint8_t drive, uint32_t first_cluster,
 /* --------------- Заглушки для записи (пока не реализованы) ------------*/
 int fat32_write_file(uint8_t drive, const char* path, const uint8_t* buf, uint32_t size){ (void)drive; (void)path; (void)buf; (void)size; return -1; }
 /* старый stub fat32_create_file удалён */
-int fat32_write_file_data(uint8_t d,const char*p,const uint8_t*b,uint32_t s,uint32_t o){(void)d;(void)p;(void)b;(void)s;(void)o;return -1;}
+int fat32_write_file_data(uint8_t drive,const char*name,const uint8_t*buf,uint32_t size,uint32_t offset){
+    if(!name||!buf||size==0) return -1;
+
+    /* --- ищем файл в текущем каталоге --- */
+    fat32_entry_t *list = malloc(64*sizeof(fat32_entry_t));
+    if (!list) return -1;
+    int n = fat32_list_dir(drive, current_dir_cluster, list, 64);
+    int idx=-1;
+    for(int i=0;i<n;i++) if(!(list[i].attr&0x10))
+        if(strcasecmp_ascii(list[i].name,name)==0){ idx=i; break; }
+
+    if(idx==-1){
+        /* создаём файл */
+        if(offset!=0){ return -1; }
+        if(fat32_create_file(drive,name)!=0) {mfree(list); return -1;}
+        n = fat32_list_dir(drive, current_dir_cluster, list, 64);
+        for(int i=0;i<n;i++) if(!(list[i].attr&0x10))
+            if(strcasecmp_ascii(list[i].name,name)==0){ idx=i; break; }
+        if(idx==-1) {mfree(list); return -1;}
+    }
+
+    fat32_entry_t *ent = &list[idx];
+    uint32_t file_size = ent->size;
+    uint32_t first_cluster = ent->first_cluster;
+    if(first_cluster==0){ /* allocate first cluster */
+        uint32_t cl = find_free_cluster(drive);
+        qemu_debug_printf("ALLOC_FIRST_CLUSTER: found=%u\n", cl);
+        if(!cl) {mfree(list); return -1;}
+        fat_write_fat_entry(drive, cl, 0x0FFFFFFF);
+        first_cluster = cl;
+        ent->first_cluster = cl;
+    }
+
+    /* --- обеспечиваем достаточно кластеров --- */
+    uint32_t cluster_size = fat32_bpb.sectors_per_cluster * 512;
+    if (cluster_size == 0) cluster_size = 512; /* страховка от деления на ноль */
+    uint32_t need_size = offset + size;
+    uint32_t need_clusters = (need_size + cluster_size -1)/cluster_size;
+
+    uint32_t cl = first_cluster; uint32_t chain_len=1;
+    while(1){
+        uint32_t next = fat32_get_next_cluster(drive, cl);
+        if(next>=0x0FFFFFF8) break;
+        chain_len++; cl=next;
+    }
+    while(chain_len<need_clusters){
+        uint32_t newcl = find_free_cluster(drive);
+        qemu_debug_printf("EXTEND_CHAIN: cur=%u new=%u\n", cl, newcl);
+        if(!newcl) {mfree(list); return -1;}
+        qemu_debug_printf("EXTEND_CHAIN: write FAT link %u->%u\n", cl, newcl);
+        fat_write_fat_entry(drive, cl, newcl);
+        fat_write_fat_entry(drive, newcl, 0x0FFFFFFF);
+        chain_len++; cl=newcl;
+    }
+
+    /* --- запись --- */
+    uint32_t pos=0; uint32_t cur_off=offset; cl = first_cluster;
+    uint32_t skip = cur_off/cluster_size;
+    for(uint32_t i=0;i<skip;i++){ cl = fat32_get_next_cluster(drive, cl); }
+
+    uint8_t *sector = malloc(512);
+    if (!sector) {mfree(list); return -1;}
+    while(pos<size){
+        uint32_t within = cur_off % cluster_size;
+        uint32_t sec_in_cluster = within / 512;
+        uint32_t sec_off = within % 512;
+        uint32_t lba = fat32_cluster_to_lba(cl)+sec_in_cluster;
+        if(sec_off==0 && (size-pos)>=512){
+            /* можем писать полный сектор */
+            qemu_debug_printf("write_sector: lba=%d, pos=%d\n", lba, pos);
+            if(ata_write_sector(drive, lba, (uint8_t*)buf+pos)!=0) { mfree(sector); return -1; }
+            pos+=512; cur_off+=512;
+        } else {
+            /* читаем сектор, модифицируем */
+            if(ata_read_sector(drive, lba, sector)!=0) { mfree(sector); return -1; }
+            uint32_t chunk = 512-sec_off; if(chunk>size-pos) chunk=size-pos;
+            /* копируем данные из пользовательского буфера в считанный сектор */
+            memcpy((uint8_t*)buf+pos, &sector[sec_off], chunk);
+            qemu_debug_printf("WRITE_PARTIAL: lba=%u sec_off=%u chunk=%u\n", lba, sec_off, chunk);
+            if(ata_write_sector(drive, lba, sector)!=0) { mfree(sector); return -1; }
+            pos+=chunk; cur_off+=chunk;
+        }
+        if((cur_off % cluster_size)==0 && pos<size){
+            cl = fat32_get_next_cluster(drive, cl);
+        }
+    }
+    mfree(sector);
+    /* --- обновляем размер, если увеличился --- */
+    if(need_size>file_size){
+        ent->size = need_size;
+        /* найти и обновить запись в каталоге (SFN) */
+        uint8_t *sect = malloc(512);
+        if (!sect) {mfree(list); return -1;}
+        for(uint8_t sc=0; sc<fat32_bpb.sectors_per_cluster; sc++){
+            uint32_t lba = fat32_cluster_to_lba(current_dir_cluster)+sc;
+            if(ata_read_sector(drive,lba,sect)!=0) { mfree(sect); return -1; }
+            for(int off=0; off<512; off+=32){
+                fat32_dir_entry_t *e = (fat32_dir_entry_t*)&sect[off];
+                if((e->attr&0x0F)==0x0F) continue;
+                char tmp[64]; shortname_to_string(e->name,tmp);
+                if(strcasecmp_ascii(tmp, ent->name)==0){
+                    e->file_size = need_size;
+                    e->first_cluster_high = (first_cluster>>16)&0xFFFF; /* запись SFN всё ещё содержит high/low */
+                    e->first_cluster_low = first_cluster & 0xFFFF;
+                    qemu_debug_printf("DIR_ENT_WR: lba=%u off=%d cnt=%d\n", lba, off, 32);
+                    if(ata_write_sector(drive,lba,sect)!=0) { mfree(sect); return -1; }
+                    sc=0xFF; break;
+                }
+            }
+        }
+        mfree(sect);
+    }
+    mfree(list);
+
+    /* --- операция завершена: сброс кеша FAT, чтобы следующие вызовы
+       (например cd) видели уже записанные изменения --- */
+    cached_fat_sector = 0xFFFFFFFF;
+    next_free_hint    = 2;
+
+    return size;
+}
+
 int fat32_read_file_data(uint8_t d,const char*p,uint8_t*b,uint32_t s,uint32_t o){(void)d;(void)p;(void)b;(void)s;(void)o;return -1;}
 
 /* -------------------------------------------------------------
@@ -264,6 +425,17 @@ int fat32_read_file_data(uint8_t d,const char*p,uint8_t*b,uint32_t s,uint32_t o)
  * -----------------------------------------------------------*/
 int fat32_resolve_path(uint8_t drive, const char* path, uint32_t* target_cluster) {
     if (!path || !target_cluster) return -1;
+
+    /* Снимаем возможный префикс "X:\" или "X:/" (номер диска) */
+    if (path[1] == ':' && (path[2] == '\\' || path[2] == '/')) {
+        /* если после префикса ничего нет – это корень */
+        if (path[3] == '\0') {
+            *target_cluster = root_dir_first_cluster;
+            return 0;
+        }
+        /* пропускаем "X:\" */
+        path += 3;
+    }
 
     /* Абсолютный корень */
     if ((path[0]=='/' || path[0]=='\\') && path[1]=='\0') {
@@ -283,6 +455,9 @@ int fat32_resolve_path(uint8_t drive, const char* path, uint32_t* target_cluster
         int n = fat32_list_dir(drive, current_dir_cluster, list, 2);
         if (n<2) return -1;
         *target_cluster = list[1].first_cluster;
+        /* если ".." указывает на текущий каталог – считаем, что это корень */
+        if (*target_cluster == current_dir_cluster || *target_cluster == 0)
+            *target_cluster = root_dir_first_cluster;
         return 0;
     }
 
@@ -300,31 +475,43 @@ int fat32_resolve_path(uint8_t drive, const char* path, uint32_t* target_cluster
     return -1; /* не найдено */
 }
 
-int fat32_change_dir(uint8_t drive, const char* path) {
-    uint32_t newcl;
-    if (fat32_resolve_path(drive, path, &newcl)!=0) return -1;
-    if (newcl<2) return -1;
-    current_dir_cluster = newcl;
-    return 0;
+int fat32_change_dir(uint8_t d,const char* p){
+    uint32_t c;
+    int r=fat32_resolve_path(d,p,&c);
+    kprintf("DBG cd(%s) -> %d cl=%u\n",p,r,c);
+    if(!r && c>=2){ current_dir_cluster=c; }
+    return r;
 }
 
 /* Найти свободный кластер (значение 0 в FAT) */
 static uint32_t find_free_cluster(uint8_t drive){
-    for(uint32_t cl=3; cl<0x0FFFFFEF; cl++){
-        if(fat32_get_next_cluster(drive, cl)==0x00000000) return cl;
+    if(total_clusters==0) return 0;
+    uint32_t start = next_free_hint;
+    for(uint32_t iter=0; iter<total_clusters; iter++){
+        uint32_t cl = 2 + ((start -2 + iter) % total_clusters); /* диапазон 2..2+total_clusters-1 */
+        if(fat32_get_next_cluster(drive, cl)==0x00000000){
+            next_free_hint = cl+1;
+            if(next_free_hint >= 2+total_clusters) next_free_hint = 2;
+            return cl;
+        }
     }
-    return 0;
+    return 0; /* нет свободных */
 }
 /* Записать значение в FAT для указанного кластера */
 static int fat_write_fat_entry(uint8_t drive, uint32_t cluster, uint32_t value){
     uint32_t fat_offset = cluster*4;
-    uint32_t fat_sector = fat_start + fat_offset/512;
-    uint32_t ent_off    = fat_offset%512;
-    uint8_t sector[512];
-    if(ata_read_sector(drive, fat_sector, sector)!=0) return -1;
-    *(uint32_t*)&sector[ent_off] = value & 0x0FFFFFFF;
-    if(ata_write_sector(drive, fat_sector, sector)!=0) return -1;
-    cached_fat_sector = 0xFFFFFFFF; /* сброс кеша */
+    for(uint8_t t=0;t<fat32_bpb.table_count;t++){
+        uint32_t fat_sector = fat_start + t*sectors_per_fat + fat_offset/512;
+        uint32_t ent_off    = fat_offset%512;
+        uint8_t sector[512];
+        if(ata_read_sector(drive,fat_sector,sector)!=0) return -1;
+        *(uint32_t*)&sector[ent_off] = value & 0x0FFFFFFF;
+        #if FAT_DEBUG
+        qemu_debug_printf("FAT_WR: cl=%u val=%08x tbl=%u sec=%u\n", cluster, value, t, fat_sector);
+        #endif
+        if(ata_write_sector(drive,fat_sector,sector)!=0) return -1;
+    }
+    cached_fat_sector = 0xFFFFFFFF;
     return 0;
 }
 /* Подготовить SFN из long_name (упрощённо) */
@@ -341,8 +528,12 @@ static void make_sfn(const char *longname, char sfn[11]){
 }
 /* Записать последовательность LFN+SFN в каталог (один сектор, без расширения) */
 static int dir_write_entries(uint8_t drive, uint32_t lba, int offset, const uint8_t *entries, int count){
-    uint8_t sector[512]; if(ata_read_sector(drive,lba,sector)!=0) return -1;
-    memcpy(entries, &sector[offset], count*32);
+    uint8_t sector[512];
+    if(ata_read_sector(drive,lba,sector)!=0) return -1;
+    /* копируем записи по байтам во внутренний буфер сектора */
+    for(int i=0;i<count*32;i++)
+        sector[offset+i] = entries[i];
+    qemu_debug_printf("DIR_ENT_WR: lba=%u off=%d cnt=%d\n", lba, offset, count);
     if(ata_write_sector(drive,lba,sector)!=0) return -1;
     return 0;
 }
@@ -377,7 +568,7 @@ int fat32_create_file(uint8_t drive, const char* name){
     }
     /* SFN entry */
     fat32_dir_entry_t *s = (fat32_dir_entry_t*)&buf[lfn_entries*32];
-    memcpy(sfn, s->name, 11);
+    for(int i=0;i<11;i++) s->name[i] = sfn[i];
     s->attr = 0x20; /* file */
     s->file_size=0; s->first_cluster_high=0; s->first_cluster_low=0;
 
@@ -392,8 +583,9 @@ int fat32_create_file(uint8_t drive, const char* name){
                 int free_ok=1;
                 for(int e=0;e<total_entries;e++) if(sector[off+e*32]!=0x00 && sector[off+e*32]!=0xE5){free_ok=0;break;}
                 if(free_ok){
-                    /* пишем наши записи */
-                    memcpy(buf, &sector[off], total_entries*32);
+                    /* пишем наши записи в сектор */
+                    for(int i=0;i<total_entries*32;i++)
+                        sector[off+i] = buf[i];
                     int end=off+total_entries*32;
                     if(end<512) sector[end]=0x00;
                     if(ata_write_sector(drive,lba,sector)!=0){mfree(buf);return -1;}
@@ -403,7 +595,8 @@ int fat32_create_file(uint8_t drive, const char* name){
                 if(sector[off]==0x00){
                     /* достаточно ли места? если нет, сдвигаем конец */
                     memset(&sector[off],0x00,512-off); /* clear to end*/
-                    memcpy(buf, &sector[off], total_entries*32);
+                    for(int i=0;i<total_entries*32;i++)
+                        sector[off+i] = buf[i];
                     int end=off+total_entries*32;
                     if(end<512) sector[end]=0x00;
                     if(ata_write_sector(drive,lba,sector)!=0){mfree(buf);return -1;}
@@ -444,7 +637,8 @@ int fat32_create_dir(uint8_t drive, const char* name){
         }
     }
     fat32_dir_entry_t *d=(fat32_dir_entry_t*)&buf[lcnt*32];
-    memcpy(sfn, d->name, 11); d->attr=0x10; /* dir */
+    for(int i=0;i<11;i++) d->name[i] = sfn[i];
+    d->attr=0x10; /* dir */
     uint32_t newcl=find_free_cluster(drive); if(!newcl){mfree(buf);return -1;}
     d->first_cluster_high=newcl>>16; d->first_cluster_low=newcl&0xFFFF; d->file_size=0;
     /* mark cluster as end */
@@ -459,7 +653,8 @@ int fat32_create_dir(uint8_t drive, const char* name){
             for(int off=0;off<=512-32*total;off+=32){
                 int free_ok=1; for(int e=0;e<total;e++) if(sector[off+32*e]!=0x00 && sector[off+32*e]!=0xE5){free_ok=0;break;}
                 if(free_ok){
-                    memcpy(buf, &sector[off], total*32);
+                    for(int i=0;i<total*32;i++)
+                        sector[off+i] = buf[i];
                     int end=off+total*32;
                     if(end<512) sector[end]=0x00;
                     if(ata_write_sector(drive,lba,sector)!=0){mfree(buf);return -1;}
@@ -477,10 +672,11 @@ int fat32_create_dir(uint8_t drive, const char* name){
                 }
                 if(sector[off]==0x00){
                     memset(&sector[off],0,512-off);
-                    memcpy(buf, &sector[off], total*32);
+                    for(int i=0;i<total*32;i++)
+                        sector[off+i] = buf[i];
                     int end=off+total*32;
                     if(end<512) sector[end]=0x00;
-                    ata_write_sector(drive,lba,sector);
+                    if(ata_write_sector(drive,lba,sector)!=0){mfree(buf);return -1;}
                     mfree(buf);
                     /* init new dir cluster same as above */
                     uint8_t dirsec[512]; memset(dirsec,0,512);

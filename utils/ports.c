@@ -44,12 +44,12 @@ void outsw(uint16_t port, const void *addr, unsigned long count)
 }
 
 void insb(uint16_t port, void *addr, unsigned long count) {
-    // Используем ассемблер для выполнения операции ввода
+    // Use assembler to perform the input operation
     asm volatile (
-        "cld; rep insb"  // cld - устанавливает направление чтения в памяти
-        : "+D" (addr), "+c" (count)  // Указываем, что addr и count будут изменены
-        : "d" (port)  // Указываем порт, из которого будем читать
-        : "memory"  // Указываем, что память может быть изменена
+        "cld; rep insb"  // cld - sets the reading direction in memory
+        : "+D" (addr), "+c" (count)  // Specify that addr and count will be changed
+        : "d" (port)  // Specify the port from which we will read
+        : "memory"  // Specify that the memory can be changed
     );
 }
 
@@ -62,16 +62,16 @@ void reboot_system() {
 }
 
 void shutdown_system() {
-    // Метод ACPI
+    // ACPI method
     outw(0xB004, 0x2000);
 
-    // Метод APM
+    // APM method
     outw(0x604, 0x2000);
 
-    // Если предыдущие методы не сработали, попробуем метод Bochs/QEMU
+    // If the previous methods did not work, try the Bochs/QEMU method
     outw(0x4004, 0x3400);
 
-    // Если ничего не сработало, просто зациклимся
+    // If nothing worked, just loop
     while(1) {
         __asm__ volatile ("hlt");
     }

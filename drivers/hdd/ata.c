@@ -2,14 +2,22 @@
 #include <ports.h>
 #include <string.h>
 
+#ifndef ATA_DEBUG
+#define ATA_DEBUG 0  /* 1 – выводить отладку, 0 – молчать */
+#endif
+
 // Массив для хранения информации о дисках
 static ata_drive_t drives[4]; // 4 возможных диска (primary master/slave, secondary master/slave)
 
 // Функция ожидания готовности диска
 static void ata_wait(uint16_t base) {
-    uint8_t status;
+    uint8_t status; uint32_t timeout=1000000;
     do {
         status = inb(base + ATA_STATUS);
+        if(--timeout==0){
+            qemu_debug_printf("ata_wait TIMEOUT base=0x%x status=%02x\n", base, status);
+            break;
+        }
     } while (status & ATA_SR_BSY);
 }
 
@@ -214,7 +222,9 @@ int ata_write_sector(uint8_t drive, uint32_t lba, uint8_t* buffer) {
     uint16_t base = (drive < 2) ? ATA_PRIMARY_BASE : ATA_SECONDARY_BASE;
     uint8_t head = drive % 2;
     ata_select_drive(base, head);
-    //qemu_debug_printf("ata_write_sector: selected drive: %d, %d\n", base, head);
+#if ATA_DEBUG
+    qemu_debug_printf("ata_write_sector: selected drive: %d, %d\n", base, head);
+#endif
     // Set LBA and sector count
     outb(base + ATA_SECTOR_COUNT, 1);
     outb(base + ATA_SECTOR_NUM, lba & 0xFF);
@@ -226,11 +236,17 @@ int ata_write_sector(uint8_t drive, uint32_t lba, uint8_t* buffer) {
     // Wait for BSY=0 and DRQ=1 (ready to receive data) with timeout
     uint8_t status;
     uint32_t timeout = 1000000;
-    //qemu_debug_printf("testtttttttttttt\n");
-    //qemu_debug_printf("ata_write_sector: waiting for status...\n");
+#if ATA_DEBUG
+    qemu_debug_printf("ata_write_sector: waiting for status...\n");
+#endif
     do { status = inb(base + ATA_STATUS); } while (((status & ATA_SR_BSY) || !(status & ATA_SR_DRQ)) && --timeout);
-    //qemu_debug_printf("ata_write_sector: status = %02x\n", status);
-    if (timeout == 0 || (status & ATA_SR_ERR)) return -1;
+#if ATA_DEBUG
+    qemu_debug_printf("ata_write_sector: status = %02x\n", status);
+#endif
+    if (timeout == 0 || (status & ATA_SR_ERR)) {
+        qemu_debug_printf("ATA_WRITE DRQ timeout err=%02x lba=%u drive=%d\n", status, lba, drive);
+        return -1;
+    }
     // Write 256 words (512 bytes)
     for (int i = 0; i < 256; i++) {
         uint16_t data = buffer[i*2] | (buffer[i*2+1] << 8);
@@ -238,10 +254,17 @@ int ata_write_sector(uint8_t drive, uint32_t lba, uint8_t* buffer) {
     }
     // Wait for BSY=0 (command complete) with timeout
     timeout = 1000000;
-    //qemu_debug_printf("ata_write_sector: waiting for status...\n");
+#if ATA_DEBUG
+    qemu_debug_printf("ata_write_sector: waiting for status...\n");
+#endif
     do { status = inb(base + ATA_STATUS); } while ((status & ATA_SR_BSY) && --timeout);
-    //qemu_debug_printf("ata_write_sector: status = %02x\n", status);
-    if (timeout == 0 || (status & ATA_SR_ERR)) return -1;
+#if ATA_DEBUG
+    qemu_debug_printf("ata_write_sector: status = %02x\n", status);
+#endif
+    if (timeout == 0 || (status & ATA_SR_ERR)) {
+        qemu_debug_printf("ATA_WRITE BSY timeout/ERR=%02x lba=%u drive=%d\n", status, lba, drive);
+        return -1;
+    }
     return 0;
 }
 

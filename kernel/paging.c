@@ -1,9 +1,9 @@
 /*
  * Simple identity-mapping paging using 4 MiB pages (PSE).
  * Every virtual address maps to the same physical address, so
- * existing flat-kernel code continues to work, но теперь есть
- * возможность применять защиту страниц, создавать guard-pages
- * для стека и т. д.
+ * existing flat-kernel code continues to work, but now we have
+ * ability to apply page protection, create guard-pages
+ * for stack and etc.
  *
  *  – page directory occupies 4 KiB and is aligned.
  *  – all 1024 PDE are filled: 4 GiB / 4 MiB = 1024.
@@ -41,13 +41,13 @@ void init_paging(void)
 
 void disable_cache_for_region(uint32_t addr, uint32_t size)
 {
-    /* Выравниваем начало и конец по границе 4-МиБ страниц */
-    uint32_t start = addr & 0xFFC00000;               /* обнуляем младшие 22 бита */
+    /* Align start and end to 4 MiB page boundary */
+    uint32_t start = addr & 0xFFC00000;               /* clear lower 22 bits */
     uint32_t end   = (addr + size - 1) & 0xFFC00000;
     for (uint32_t p = start; p <= end; p += 0x400000) {
-        uint32_t idx = p >> 22;                       /* номер PDE */
-        page_directory[idx] |= PAGE_PCD;              /* отключить кеширование */
+        uint32_t idx = p >> 22;                       /* PDE index */
+        page_directory[idx] |= PAGE_PCD;              /* disable caching */
     }
-    /* Сбрасываем TLB перезагрузкой CR3 */
+    /* Reset TLB by reloading CR3 */
     asm volatile("mov %0, %%cr3" :: "r"(page_directory));
 } 

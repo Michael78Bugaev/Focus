@@ -136,7 +136,7 @@ void snake_main(void)
 
     /* Restore text console */
     kclear();
-    shell_execute("sh");
+    //shell_execute("sh");
 }
 
 /* Unused placeholder kept for symmetry */

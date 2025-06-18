@@ -13,6 +13,7 @@
 #include <idt.h>
 #include <apic.h>
 #include <vbe_terminal.h>
+#include <sched.h>
 
 // Map the APIC registers at the default physical base
 static volatile uint32_t *apic_regs = (volatile uint32_t *)APIC_DEFAULT_BASE;
@@ -69,6 +70,7 @@ void apic_timer_handler(struct InterruptRegisters *regs) {
     if (apic_ticks % 10 == 0) {
         vbe_swap();
     }
+    scheduler_tick(regs);
 }
 
 // Initialize the APIC timer

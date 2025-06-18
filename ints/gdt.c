@@ -13,14 +13,15 @@ struct tss_entry_struct tss_entry;
 void init_gdt(){
     gdt_ptr.limit = (sizeof(struct gdt_entry_struct) * 6) - 1;
     gdt_ptr.base = (uint32_t)&gdt_entries;
-
-    set_gdt_gate(0,0,0,0,0); //Null segment
-    set_gdt_gate(1,0,0xFFFFFFFF, 0x9A, 0xCF); //Kernel code segment
-    set_gdt_gate(2,0,0xFFFFFFFF, 0x92, 0xCF); //Kernel data segment
-    set_gdt_gate(3,0,0xFFFFFFFF, 0xFA, 0xCF); //User code segment
-    set_gdt_gate(4,0,0xFFFFFFFF, 0xF2, 0xCF); //User data segment
+    // Setting up GDT entries (gates)
+    set_gdt_gate(0,0,0,0,0); // Null segment
+    set_gdt_gate(1,0,0xFFFFFFFF, 0x9A, 0xCF); // Kernel code segment
+    set_gdt_gate(2,0,0xFFFFFFFF, 0x92, 0xCF); // Kernel data segment
+    set_gdt_gate(3,0,0xFFFFFFFF, 0xFA, 0xCF); // User code segment
+    set_gdt_gate(4,0,0xFFFFFFFF, 0xF2, 0xCF); // User data segment
     write_tts(5,0x10, 0x0);
 
+    // Flushing GDT and TSS (important)
     gdt_flush((uint32_t)&gdt_ptr);
     tss_flush();
     
