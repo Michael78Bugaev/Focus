@@ -27,6 +27,12 @@ void init_gdt(){
     
 }
 
+// Setting up TSS (Task State Segment)
+// This is used for switching between tasks
+// num - index of the TSS entry
+// ss0 - kernel stack segment
+// esp0 - kernel stack pointer
+
 void write_tts(uint32_t num, uint16_t ss0, uint32_t esp0){
     uint32_t base = (uint32_t) &tss_entry;
     uint32_t limit = base + sizeof(tss_entry);

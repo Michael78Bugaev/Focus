@@ -30,5 +30,6 @@ void scheduler_add(task_t *t) {
 /* Minimal implementation: just change the current pointer */
 void scheduler_tick(struct InterruptRegisters *regs) {
     (void)regs;
-    if (current) current = current->next;
+    if (current && current->next && current->next!=current && current->next->eip)
+        current = current->next;
 } 

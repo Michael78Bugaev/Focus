@@ -139,7 +139,7 @@ void isr_handler(struct InterruptRegisters* regs){
     if (regs->int_no < 32) {
         asm("cli");
         // First, print the exception vector number
-        qemu_debug_printf("Exception: %s\nRegs: EIP: 0x%08x ESP: 0x%08x EFLAGS: 0x%08x\n", exception_messages[regs->int_no], regs->eip, regs->esp, regs->eflags);
+        qemu_debug_printf("Exception: %s\nRegs: EIP: 0x%08x ESP: 0x%08x EFLAGS: 0x%08x CR2: 0x%08x ERR: 0x%08x\n", exception_messages[regs->int_no], regs->eip, regs->esp, regs->eflags, regs->cr2, regs->err_code);
         //qemu_debug_printf("TOP STACK:"); for(int i=0;i<32;i++) qemu_debug_printf("0x%08x ", *(uint32_t*)(regs->esp+i*4));
         //qemu_debug_printf("EAX: 0x%08x, EBX: 0x%08x, ECX: 0x%08x, EDX: 0x%08x, ESI: 0x%08x, EDI: 0x%08x, EBP: 0x%08x, ESP: 0x%08x\n", regs->eax, regs->ebx, regs->ecx, regs->edx, regs->esi, regs->edi, regs->ebp, regs->esp);
         // Halt here
@@ -148,6 +148,10 @@ void isr_handler(struct InterruptRegisters* regs){
     if (regs->int_no == 14){
         kprint("Page fault\n");
         for (;;);
+    }
+    if (regs->int_no == 128) {
+        syscall_handler(regs);
+        return;
     }
 }
 

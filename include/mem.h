@@ -3,7 +3,7 @@
 #include <stddef.h>
 
 #define NULL_POINTER ((void*)0)
-#define DYNAMIC_MEM_TOTAL_SIZE (1024 * 1024 * 1024) // 1GB dynamic memory pool
+#define DYNAMIC_MEM_TOTAL_SIZE (8 * 1024 * 1024) // 8 MiB динамической памяти
 #define DYNAMIC_MEM_NODE_SIZE sizeof(dynamic_mem_node_t) // 16
 
 typedef struct dynamic_mem_node {

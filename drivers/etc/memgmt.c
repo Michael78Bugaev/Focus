@@ -92,7 +92,7 @@ void mfree(void *p) {
     }
 
     // Get mem node associated with pointer
-    dynamic_mem_node_t *current_mem_node = (dynamic_mem_node_t *) ((uint8_t *) p - DYNAMIC_MEM
+    dynamic_mem_node_t *current_mem_node = (dynamic_mem_node_t *) ((uint8_t *) p - DYNAMIC_MEM_NODE_SIZE);
     if (current_mem_node == NULL_POINTER) {
         return;
     }

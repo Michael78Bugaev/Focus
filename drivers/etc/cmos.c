@@ -17,9 +17,9 @@ uint8_t read_cmos(uint8_t reg) {
     return inb(CMOS_DATA);
 }
 
-// Функция получения даты и времени из BIOS
+// Function to get the date and time from BIOS
 void get_date_time(uint8_t *second, uint8_t *minute, uint8_t *hour, uint8_t *day, uint8_t *month, uint8_t *year) {
-    // Читаем регистры CMOS
+    // Read CMOS registers
     *second = read_cmos(0x00);
     *minute = read_cmos(0x02);
     *hour = read_cmos(0x04);

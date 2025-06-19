@@ -20,7 +20,8 @@ void init_paging(void)
     /* 1. Fill PDE: base physical address and flags */
     for (uint32_t i = 0; i < 1024; i++) {
         uint32_t phys = i * 0x400000;          /* 4 MiB */
-        page_directory[i] = phys | PAGE_PRESENT | PAGE_RW | (1 << 7); /* PS=1 */
+        page_directory[i] =
+            phys | PAGE_PRESENT | PAGE_RW | PAGE_USER | (1<<7); /* PS, всем CPL */
     }
 
     /* 2. Load PD address to CR3 (paging disabled ⇒ VA=PA). */

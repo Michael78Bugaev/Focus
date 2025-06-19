@@ -103,9 +103,9 @@ void qemu_debug_printf(const char *format, ...)
             write_serial(*p++);
             continue;
         }
-        p++;  // skip '%'
+        p++;  // Skip '%'
         int left = 0, zero_pad = 0;
-        // parse flags
+        // Parse flags
         while (*p == '-' || *p == '0') {
             if (*p == '-') left = 1;
             if (*p == '0') zero_pad = 1;

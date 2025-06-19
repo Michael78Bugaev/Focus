@@ -13,21 +13,24 @@ static void memcpy_to_vaddr_manual(Elf32_Addr vaddr, const void *src, size_t len
 /* map one 4-MiB page (identity) and mark Present|RW */
 static void map_4M(uint32_t vaddr)
 {
-    uint32_t pd_idx = vaddr >> 22;
-    extern uint32_t *page_directory;   /* from paging.c */
-    if (!(page_directory[pd_idx] & PAGE_PRESENT)) {
-        uint32_t phys = pd_idx << 22;                /* identity     */
-        page_directory[pd_idx] = phys | PAGE_PRESENT | PAGE_RW | (1<<7);
-        asm volatile ("invlpg (%0)" :: "r"(vaddr));  /* flush TLB    */
-    }
+    uint32_t idx = vaddr >> 22;
+    extern uint32_t *page_directory;
+    uint32_t phys  = idx << 22;
+    uint32_t flags = PAGE_PRESENT | PAGE_RW | PAGE_USER | (1<<7); /* PS */
+
+    if (!(page_directory[idx] & PAGE_PRESENT))
+        page_directory[idx] = phys | flags;     /* новый PDE   */
+    else
+        page_directory[idx] |= PAGE_USER;       /* только добавить US */
+    asm volatile ("invlpg (%0)" :: "r"(vaddr));
 }
 
 /* ensure every 4-MiB chunk in [vaddr, vaddr+memsz) mapped */
-static void ensure_region_mapped(uint32_t vaddr, uint32_t memsz)
+void ensure_region_mapped(uint32_t vaddr, uint32_t memsz)
 {
     uint32_t start = vaddr & ~0x3FFFFF;              /* 4 MiB align  */
     uint32_t end   = (vaddr + memsz + 0x3FFFFF) & ~0x3FFFFF;
-    for (uint32_t p = start; p < end; p += 0x400000)
+    for (uint32_t p = start; p <= end; p += 0x400000)
         map_4M(p);
 }
 

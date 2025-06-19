@@ -1,17 +1,17 @@
 ; Auto-generated – do not edit
 global kprintf
-kprintf equ 0x0010d640
+kprintf equ 0x0010e720
 global malloc
-malloc equ 0x001079b0
+malloc equ 0x00108a90
 global mfree
-mfree equ 0x00107af0
+mfree equ 0x00108bd0
 global strcmp
-strcmp equ 0x00105b50
+strcmp equ 0x00106b70
 global strcpy
-strcpy equ 0x00105a20
+strcpy equ 0x00106a40
 global strlen
-strlen equ 0x00105a40
+strlen equ 0x00106a60
 global memcpy
-memcpy equ 0x001066e0
+memcpy equ 0x00107700
 global memset
-memset equ 0x00106710
+memset equ 0x00107730

@@ -39,7 +39,7 @@ void kentr(uint32_t magic, struct multiboot_info *mbi) {
     kprintf("flib: kprintf at 0x%08x\n", &kprintf);
     kprintf("flib: kprint at 0x%08x\n", &kprint);
 
-    net_init();
+    /* net_init(); // ???????? ????????? ?? ??????????? e1000 */
     int bmp;
     uint8_t *bmp_data = malloc(219 * 87);
     if (!bmp_data) kprintf("can't print logo. error while allocating memory\n");
@@ -55,9 +55,9 @@ void kentr(uint32_t magic, struct multiboot_info *mbi) {
     mfree(bmp_data);
     kprintf("RING 2 DONE\n");
 
+    extern void shell_main(void);
+    shell_main();
 
-
-
-    kprintf("KERNEL END. HALT.");
+    kprintf("KERNEL HALTED.\n");
     for (;;);
 }
